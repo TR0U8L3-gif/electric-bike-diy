@@ -1,5 +1,6 @@
 #include <EEPROM.h>
 #include "setup_functions.h"
+#include "system_state.h"
 
 // EEPROM configuration
 #define EEPROM_SIZE 9  // 4 bytes for min + 4 bytes for max + 1 byte for status
@@ -13,7 +14,7 @@ const unsigned int THROTTLE_OUT_PIN = 3;  // GPIO3 - throttle/power output (anal
 
 // Default throttle values
 const unsigned int THROTTLE_VALUE_MAX_DEFAULT = 3500;
-const unsigned int THROTTLE_VALUE_MIN_DEFAULT = 1450;
+const unsigned int THROTTLE_VALUE_MIN_DEFAULT = 1500;
 
 // Power scale from 0 to 100
 const unsigned int SCALE = 100;
@@ -27,15 +28,15 @@ unsigned int throttleValueMin = THROTTLE_VALUE_MIN_DEFAULT;
 unsigned int throttleValue = 0;
 unsigned int powerValue = 0;
 
-// System State
-enum SystemState {
-  IDLE,
-  RUNNING,
-  THROTTLE_CALIBRATION,
-  STORAGE_ERROR,
-};
+// System state
+SystemState* systemState = nullptr;
 
-SystemState systemState = RUNNING;
+void setSystemState(SystemState* newState) {
+  if (systemState != nullptr) {
+    delete systemState;
+  }
+  systemState = newState;
+}
 
 // === Communication abstraction ===
 
@@ -65,19 +66,17 @@ void setup() {
     EEPROM_ADDR_THROTTLE_MIN,
     EEPROM_ADDR_THROTTLE_MAX,
     THROTTLE_VALUE_MIN_DEFAULT,
-    THROTTLE_VALUE_MAX_DEFAULT
-  );
+    THROTTLE_VALUE_MAX_DEFAULT);
 
   InitializeStorageParameters initParams = InitializeStorageParameters(
-    EEPROM_SIZE, 
-    initThrottleParams
-  );
+    EEPROM_SIZE,
+    initThrottleParams);
 
   InitializeStorageResult initResult = initializeStorage(initParams);
-  
-  InitializeThrottleStorageResult initThrottleResult = initResult.throttleStorageResult; 
-  if(!initThrottleResult.storageError){
-    if(initThrottleResult.isCalibrated){
+
+  InitializeThrottleStorageResult initThrottleResult = initResult.throttleStorageResult;
+  if (!initThrottleResult.storageError) {
+    if (initThrottleResult.isCalibrated) {
       throttleValueMax = initThrottleResult.valueMax;
       throttleValueMin = initThrottleResult.valueMin;
       sendCommand("Loaded throttle calibration values.");
@@ -90,40 +89,49 @@ void setup() {
     sendCommand("Invalid throttle calibration values received from storage - used default values.");
   }
 
-  if(initResult.storageError()){
-    systemState = STORAGE_ERROR;
-  } 
+  if (initResult.storageError()) {
+    setSystemState(new StorageErrorState());
+  } else {
+    setSystemState(new RunningState());
+  }
 }
 
-// === Main loop helper functions ===
+// === Main loop input ===
 
 void handleInput() {
   char cmd = readCommand();
-  if ( cmd == 'e' && systemState == IDLE){
+  // IDLE
+  if (cmd == 'e' && isSystemState(systemState, IDLE)) {
     sendCommand("Exiting idle.");
-    systemState = RUNNING;
-  } else if( cmd == 'e' && systemState == RUNNING){
+    setSystemState(new RunningState());
+  } 
+  // RUNNING
+  else if (cmd == 'e' && isSystemState(systemState, RUNNING)) {
     sendCommand("Stopping program.");
-    systemState = IDLE;
-  }
-  else if (cmd == 'c' && systemState != THROTTLE_CALIBRATION) {
+    setSystemState(new IdleState());
+  } else if (cmd == 'c' && isSystemState(systemState, RUNNING)) {
     sendCommand("Starting throttle calibration...");
-    systemState = THROTTLE_CALIBRATION;
-  } else if (cmd == 's' && systemState == THROTTLE_CALIBRATION) {
-    sendCommand("Exiting throttle calibration.");
-    systemState = RUNNING;
-  } else if (cmd == 'C' && systemState == STORAGE_ERROR){
+    setSystemState(new ThrottleCalibrationState());
+  } 
+  // THROTTLE_CALIBRATION
+  else if (cmd == 'e' && isSystemState(systemState, THROTTLE_CALIBRATION)) {
+    sendCommand("Exiting throttle calibration - without saving.");
+    setSystemState(new RunningState());
+  } else if (cmd == 's' && isSystemState(systemState, THROTTLE_CALIBRATION)) {
+    sendCommand("Exiting throttle calibration - saving.");
+    setSystemState(new RunningState());
+  } 
+  // STORAGE_ERROR
+  else if (cmd == 'e' && isSystemState(systemState, STORAGE_ERROR)) {
+    sendCommand("Exiting storage error.");
+    setSystemState(new RunningState());
+  } else if (cmd == 'C' && isSystemState(systemState, STORAGE_ERROR)) {
     sendCommand("Clearing storage...");
     clearStorage();
-    systemState = RUNNING;
-  } else if (cmd == 'T' && systemState == STORAGE_ERROR){
+    setSystemState(new RunningState());
+  } else if (cmd == 'T' && isSystemState(systemState, STORAGE_ERROR)) {
     sendCommand("Recalibrate throttle...");
-    systemState = THROTTLE_CALIBRATION;
-  } else if (cmd == 'e' && systemState == STORAGE_ERROR){
-    sendCommand("Exiting storage error.");
-    systemState = RUNNING;
-  } else if (cmd != 0) {
-    sendCommand("Unknown command: " + String(cmd));
+    setSystemState(new ThrottleCalibrationState());
   }
 }
 
@@ -132,20 +140,16 @@ void handleInput() {
 void loop() {
   handleInput();
 
-    switch (systemState) {
-    case RUNNING:
-      runSystem();
-      break;
-    case THROTTLE_CALIBRATION:
-      calibrateThrottle();
-      break;
-    case STORAGE_ERROR:
-      storageError();
-      break;  
-    case IDLE:
-    default:
-      // Do nothing
-      break;
+  if (isSystemState(systemState, RUNNING)) {
+    runSystem();
+  } else if (isSystemState(systemState, THROTTLE_CALIBRATION)) {
+    calibrateThrottle();
+  } else if (isSystemState(systemState, STORAGE_ERROR)) {
+    storageError();
+  } else if (isSystemState(systemState, IDLE)) {
+    // Do idle
+  } else {
+    // Do nothing
   }
 }
 
@@ -164,15 +168,15 @@ void calibrateThrottle() {
   // read current throttle values
   int val = analogRead(THROTTLE_PIN);
   // disable output during calibration
-  analogWrite(THROTTLE_OUT_PIN, 0);  
-    // if (val > maxVal) maxVal = val;
-    // if (val < minVal) minVal = val;
+  analogWrite(THROTTLE_OUT_PIN, 0);
+  // if (val > maxVal) maxVal = val;
+  // if (val < minVal) minVal = val;
 
   sendCommand("Reading: " + String(val));
   delay(100);
 }
 
-void storageError(){
+void storageError() {
   sendCommand("Init Storage Error");
   delay(100);
 }
@@ -187,9 +191,8 @@ int throttleToPower(int value) {
   return map(result, throttleValueMin, throttleValueMax, 0, SCALE);
 }
 
-void clearStorage(){
-  for (size_t i = 0; i < EEPROM_SIZE; i++)
-  {
+void clearStorage() {
+  for (size_t i = 0; i < EEPROM_SIZE; i++) {
     EEPROM.write(i, 255);
   }
   EEPROM.commit();
