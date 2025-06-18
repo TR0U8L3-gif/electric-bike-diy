@@ -3,30 +3,30 @@
 #include "system_state.h"
 
 // EEPROM configuration
-#define EEPROM_SIZE 9  // 4 bytes for min + 4 bytes for max + 1 byte for status
-#define EEPROM_ADDR_THROTTLE_MIN 0
-#define EEPROM_ADDR_THROTTLE_MAX 4
-#define EEPROM_ADDR_THROTTLE_STATUS 8
+#define EEPROM_SIZE 5                  // 2 bytes for min + 2 bytes for max + 1 byte for status
+#define EEPROM_ADDR_THROTTLE_MIN 0     // uint16_t
+#define EEPROM_ADDR_THROTTLE_MAX 2     // uint16_t
+#define EEPROM_ADDR_THROTTLE_STATUS 4  // uint8_t
 
 // Pins
-const unsigned int THROTTLE_PIN = 2;      // GPIO2 - throttle input (analog)
-const unsigned int THROTTLE_OUT_PIN = 3;  // GPIO3 - throttle/power output (analog)
+const uint16_t THROTTLE_PIN = 2;      // GPIO2 - throttle input (analog)
+const uint16_t THROTTLE_OUT_PIN = 3;  // GPIO3 - throttle/power output (analog)
 
 // Default throttle values
-const unsigned int THROTTLE_VALUE_MAX_DEFAULT = 3500;
-const unsigned int THROTTLE_VALUE_MIN_DEFAULT = 1500;
+const uint16_t THROTTLE_VALUE_MAX_DEFAULT = 3500;
+const uint16_t THROTTLE_VALUE_MIN_DEFAULT = 1500;
 
 // Power scale from 0 to 100
-const unsigned int SCALE = 100;
+const uint16_t SCALE = 100;
 
 // 10 seconds timeout for any tasks
-const unsigned long TASK_TIMEOUT = 10000;
+const uint16_t TASK_TIMEOUT = 10000;  // max value: 65535 ~ 65sec ~ 1min
 
 // Variables
-unsigned int throttleValueMax = THROTTLE_VALUE_MAX_DEFAULT;
-unsigned int throttleValueMin = THROTTLE_VALUE_MIN_DEFAULT;
-unsigned int throttleValue = 0;
-unsigned int powerValue = 0;
+uint16_t throttleValueMax = THROTTLE_VALUE_MAX_DEFAULT;
+uint16_t throttleValueMin = THROTTLE_VALUE_MIN_DEFAULT;
+uint16_t throttleValue = 0;
+uint16_t powerValue = 0;
 
 // System state
 SystemState* systemState = nullptr;
@@ -80,10 +80,10 @@ void setup() {
       throttleValueMax = initThrottleResult.valueMax;
       throttleValueMin = initThrottleResult.valueMin;
       sendCommand("Loaded throttle calibration values.");
-      sendCommand("Min: " + String(initThrottleResult.valueMax));
-      sendCommand("Max: " + String(initThrottleResult.valueMin));
+      sendCommand("Max: " + String(initThrottleResult.valueMax));
+      sendCommand("Min: " + String(initThrottleResult.valueMin));
     } else {
-      sendCommand("Throttle calibation is not set - used default values.");
+      sendCommand("Throttle calibration is not set - used default values.");
     }
   } else {
     sendCommand("Invalid throttle calibration values received from storage - used default values.");
@@ -104,23 +104,27 @@ void handleInput() {
   if (cmd == 'e' && isSystemState(systemState, IDLE)) {
     sendCommand("Exiting idle.");
     setSystemState(new RunningState());
-  } 
+  } else if (cmd == 'r' && isSystemState(systemState, IDLE)) {
+    resetESP();
+  } else if (cmd == 'c' && isSystemState(systemState, IDLE)) {
+    sendCommand("Starting throttle calibration...");
+    setSystemState(new ThrottleCalibrationState());
+  }
   // RUNNING
   else if (cmd == 'e' && isSystemState(systemState, RUNNING)) {
     sendCommand("Stopping program.");
     setSystemState(new IdleState());
-  } else if (cmd == 'c' && isSystemState(systemState, RUNNING)) {
-    sendCommand("Starting throttle calibration...");
-    setSystemState(new ThrottleCalibrationState());
-  } 
+    sendCommand("\nCommands: \n 'e' - exit idle state\n 'r' - reboot\n 'c' - calibrate\n");
+  }
   // THROTTLE_CALIBRATION
   else if (cmd == 'e' && isSystemState(systemState, THROTTLE_CALIBRATION)) {
     sendCommand("Exiting throttle calibration - without saving.");
     setSystemState(new RunningState());
   } else if (cmd == 's' && isSystemState(systemState, THROTTLE_CALIBRATION)) {
     sendCommand("Exiting throttle calibration - saving.");
+    saveThrottleCalibration();
     setSystemState(new RunningState());
-  } 
+  }
   // STORAGE_ERROR
   else if (cmd == 'e' && isSystemState(systemState, STORAGE_ERROR)) {
     sendCommand("Exiting storage error.");
@@ -155,6 +159,18 @@ void loop() {
 
 // == System state function ==
 
+void calibrateThrottle() {
+  ThrottleCalibrationState* currentState = static_cast<ThrottleCalibrationState*>(systemState);
+  // disable output during calibration
+  analogWrite(THROTTLE_OUT_PIN, 0);
+
+  // read current throttle values
+  uint16_t val = analogRead(THROTTLE_PIN);
+  currentState->updateCalibrationValues(val);
+  sendCommand("Reading: " + String(val) + " | MAX: " + String(currentState->maxValue) + " | MIN: " + String(currentState->minValue));
+  delay(100);
+}
+
 void runSystem() {
   throttleValue = analogRead(THROTTLE_PIN);
   powerValue = throttleToPower(throttleValue);
@@ -164,31 +180,61 @@ void runSystem() {
   delay(100);
 }
 
-void calibrateThrottle() {
-  // read current throttle values
-  int val = analogRead(THROTTLE_PIN);
-  // disable output during calibration
-  analogWrite(THROTTLE_OUT_PIN, 0);
-  // if (val > maxVal) maxVal = val;
-  // if (val < minVal) minVal = val;
-
-  sendCommand("Reading: " + String(val));
+void storageError() {
   delay(100);
 }
 
-void storageError() {
-  sendCommand("Init Storage Error");
-  delay(100);
+// == System input values ==
+
+void resetESP() {
+  for (size_t i = 5; i > 0; i--) {
+    sendCommand("Restarting ESP in " + String(i));
+    delay(1000);
+  }
+  ESP.restart();
+}
+
+void saveThrottleCalibration() {
+  ThrottleCalibrationState* currentState = static_cast<ThrottleCalibrationState*>(systemState);
+  if (!currentState->isCalibrationCorrect()) {
+    sendCommand("Calibration failed: Min value (" + String(currentState->minValue) + ") is greater than Max value (" + String(currentState->maxValue) + ").");
+    return;
+  }
+
+
+  EEPROM.writeUShort(EEPROM_ADDR_THROTTLE_MIN, currentState->minValue);
+  EEPROM.writeUShort(EEPROM_ADDR_THROTTLE_MAX, currentState->maxValue);
+  EEPROM.writeUChar(EEPROM_ADDR_THROTTLE_STATUS, 'C');
+  EEPROM.commit();
+
+  throttleValueMin = currentState->minValue;
+  throttleValueMax = currentState->maxValue;
+
+  sendCommand("Calibration complete and saved.");
+  sendCommand("New Max: " + String(throttleValueMax));
+  sendCommand("New Min: " + String(throttleValueMin));
+  return;
 }
 
 // == Other functions ==
 
 // Converts analog throttle value to power percentage (0–100%)
-int throttleToPower(int value) {
-  int result = value;
+uint16_t throttleToPower(uint16_t value) {
+  uint16_t result = value;
   if (result > throttleValueMax) result = throttleValueMax;
   if (result < throttleValueMin) result = throttleValueMin;
-  return map(result, throttleValueMin, throttleValueMax, 0, SCALE);
+  return map_uint16_t(result, throttleValueMin, throttleValueMax, 0, SCALE);
+}
+
+uint16_t map_uint16_t(uint16_t x, uint16_t in_min, uint16_t in_max, uint16_t out_min, uint16_t out_max) {
+  const uint16_t run = in_max - in_min;
+  if (run == 0) {
+    log_e("map(): Invalid input range, min == max");
+    return -1;  // AVR returns -1, SAM returns 0
+  }
+  const uint16_t rise = out_max - out_min;
+  const uint16_t delta = x - in_min;
+  return (delta * rise) / run + out_min;
 }
 
 void clearStorage() {

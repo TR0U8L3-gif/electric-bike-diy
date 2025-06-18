@@ -1,21 +1,22 @@
 #ifndef SETUP_FUNCTIONS_H
 #define SETUP_FUNCTIONS_H
+#include <sys/_stdint.h>
 #include <EEPROM.h>
 
 class InitializeThrottleStorageParameters {
 public:
-  int eepromAddrStatus;
-  int eepromAddrMin;
-  int eepromAddrMax;
-  int defaultMin;
-  int defaultMax;
+  uint16_t eepromAddrStatus;
+  uint16_t eepromAddrMin;
+  uint16_t eepromAddrMax;
+  uint16_t defaultMin;
+  uint16_t defaultMax;
 
   InitializeThrottleStorageParameters(
-    const int eepromAddrStatus_val,
-    const int eepromAddrMin_val,
-    const int eepromAddrMax_val,
-    const int defaultMin_val,
-    const int defaultMax_val)
+    const uint16_t eepromAddrStatus_val,
+    const uint16_t eepromAddrMin_val,
+    const uint16_t eepromAddrMax_val,
+    const uint16_t defaultMin_val,
+    const uint16_t defaultMax_val)
     : eepromAddrStatus(eepromAddrStatus_val),
       eepromAddrMin(eepromAddrMin_val),
       eepromAddrMax(eepromAddrMax_val),
@@ -38,14 +39,14 @@ class InitializeThrottleStorageResult {
 public:
   bool storageError;
   bool isCalibrated;
-  int valueMin;
-  int valueMax;
+  uint16_t valueMin;
+  uint16_t valueMax;
 
   InitializeThrottleStorageResult(
     const bool storageError_val,
     const bool isCalibrated_val,
-    const int valueMin_val,
-    const int valueMax_val)
+    const uint16_t valueMin_val,
+    const uint16_t valueMax_val)
     : storageError(storageError_val),
       isCalibrated(isCalibrated_val),
       valueMin(valueMin_val),

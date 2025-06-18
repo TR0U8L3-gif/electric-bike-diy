@@ -5,21 +5,23 @@ InitializeThrottleStorageResult initializeThrottleStorage(InitializeThrottleStor
   // read throttle calibration values from EEPROM
   bool storageError = false;
   bool isCalibrated = false;
-  int throttleValueMinStorage, throttleValueMaxStorage, throttleValueMin, throttleValueMax = 0;
-  char throttleCalibrationStatus = EEPROM.read(params.eepromAddrStatus);
+  uint16_t throttleValueMinStorage = 0;
+  uint16_t throttleValueMaxStorage = 0;
+  uint16_t throttleValueMin, throttleValueMax = 0;
+  uint8_t throttleCalibrationStatus = EEPROM.readUChar(params.eepromAddrStatus);
 
 
   // if the status is not set to 'C', we assume calibration has not been done
   if (throttleCalibrationStatus == 'C') {
     isCalibrated = true;
 
-    EEPROM.get(params.eepromAddrMin, throttleValueMinStorage);
-    EEPROM.get(params.eepromAddrMax, throttleValueMaxStorage);
+    throttleValueMinStorage = EEPROM.readUShort(params.eepromAddrMin);
+    throttleValueMaxStorage =  EEPROM.readUShort(params.eepromAddrMax);
 
     if (throttleValueMinStorage < 0 || throttleValueMinStorage > 4095) {
       storageError = true;
     }
-    if (throttleValueMax < 0 || throttleValueMax > 4095 || throttleValueMax <= throttleValueMin) {
+    if (throttleValueMaxStorage < 0 || throttleValueMaxStorage > 4095 || throttleValueMaxStorage <= throttleValueMinStorage) {
       storageError = true;
     }
 
