@@ -104,6 +104,9 @@ void handleInput() {
   if (cmd == 'e' && isSystemState(systemState, IDLE)) {
     sendCommand("Exiting idle.");
     setSystemState(new RunningState());
+  } else if (cmd == 's' && isSystemState(systemState, IDLE)) {
+    sendCommand("Entering running state.");
+    setSystemState(new RunningState()); 
   } else if (cmd == 'r' && isSystemState(systemState, IDLE)) {
     resetESP();
   } else if (cmd == 'c' && isSystemState(systemState, IDLE)) {
@@ -114,7 +117,6 @@ void handleInput() {
   else if (cmd == 'e' && isSystemState(systemState, RUNNING)) {
     sendCommand("Stopping program.");
     setSystemState(new IdleState());
-    sendCommand("\nCommands: \n 'e' - exit idle state\n 'r' - reboot\n 'c' - calibrate\n");
   }
   // THROTTLE_CALIBRATION
   else if (cmd == 'e' && isSystemState(systemState, THROTTLE_CALIBRATION)) {
@@ -128,15 +130,13 @@ void handleInput() {
   // STORAGE_ERROR
   else if (cmd == 'e' && isSystemState(systemState, STORAGE_ERROR)) {
     sendCommand("Exiting storage error.");
-    setSystemState(new RunningState());
-  } else if (cmd == 'C' && isSystemState(systemState, STORAGE_ERROR)) {
-    sendCommand("Clearing storage...");
-    clearStorage();
-    setSystemState(new RunningState());
-  } else if (cmd == 'T' && isSystemState(systemState, STORAGE_ERROR)) {
-    sendCommand("Recalibrate throttle...");
-    setSystemState(new ThrottleCalibrationState());
-  }
+    setSystemState(new IdleState());
+  } else if (cmd == 'a' && isSystemState(systemState, STORAGE_ERROR)) {
+    sendCommand("Clearing all storage...");
+    clearAllStorage();
+    setSystemState(new IdleState());
+  } 
+
 }
 
 // === Main loop ===
@@ -151,13 +151,20 @@ void loop() {
   } else if (isSystemState(systemState, STORAGE_ERROR)) {
     storageError();
   } else if (isSystemState(systemState, IDLE)) {
-    // Do idle
+    idle();
   } else {
     // Do nothing
   }
 }
 
 // == System state function ==
+
+// TODO(radek): add state to show this message once
+// TODO(radek): add idle timeout and after timeout go to running state 
+void idle() {
+  sendCommand("\nCommands: \n 'e' - exit idle state\n 'r' - reboot\n 'c' - calibrate\n");
+  delay(1000);
+}
 
 void calibrateThrottle() {
   ThrottleCalibrationState* currentState = static_cast<ThrottleCalibrationState*>(systemState);
@@ -216,6 +223,14 @@ void saveThrottleCalibration() {
   return;
 }
 
+// TODO(radek): add variables to error state an separate clearing storage to All, Only Throttle, etc. 
+void clearAllStorage() {
+  for (size_t i = 0; i < EEPROM_SIZE; i++) {
+    EEPROM.write(i, 255);
+  }
+  EEPROM.commit();
+}
+
 // == Other functions ==
 
 // Converts analog throttle value to power percentage (0–100%)
@@ -235,11 +250,4 @@ uint16_t map_uint16_t(uint16_t x, uint16_t in_min, uint16_t in_max, uint16_t out
   const uint16_t rise = out_max - out_min;
   const uint16_t delta = x - in_min;
   return (delta * rise) / run + out_min;
-}
-
-void clearStorage() {
-  for (size_t i = 0; i < EEPROM_SIZE; i++) {
-    EEPROM.write(i, 255);
-  }
-  EEPROM.commit();
 }
