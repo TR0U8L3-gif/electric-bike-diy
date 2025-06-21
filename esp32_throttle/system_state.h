@@ -9,9 +9,44 @@ constexpr const char* THROTTLE_CALIBRATION = "THROTTLE_CALIBRATION";
 constexpr const char* STORAGE_ERROR = "STORAGE_ERROR";
 
 class SystemState {
+protected:
+  unsigned long timer;
 public:
+  SystemState()
+    : timer(0) {}
   virtual ~SystemState() = default;
+
   virtual const char* type() const = 0;
+
+  bool isTimerSet() {
+    return timer != 0;
+  }
+
+  void setTimer(unsigned long time) {
+    timer = time;
+  }
+
+  void resetTimer() {
+    timer = 0;
+  }
+
+  unsigned long getTime() {
+    return timer;
+  }
+
+  unsigned long getTimeElapsed(unsigned long time) {
+    return time - timer; 
+  }
+
+  bool isTimeElapsed(unsigned long time, unsigned long delay) {
+    if (timer == 0) {
+      timer = time;
+      return false;
+    } else {
+      return time - timer >= delay;
+    }
+  }
+
 };
 
 class IdleState : public SystemState {
@@ -59,40 +94,17 @@ class StorageErrorState : public SystemState {
 public:
   bool throttleCalibrationError;
   bool ledStatus;
-  unsigned long timer;
   StorageErrorState(bool throttleCalibrationError_val = false)
     : throttleCalibrationError(throttleCalibrationError_val),
-      timer(0),
       ledStatus(true) {}
 
   const char* type() const override {
     return STORAGE_ERROR;
   }
 
-  bool swithLedStatus(){
+  bool swithLedStatus() {
     ledStatus = !ledStatus;
     return !ledStatus;
-  }
-
-  bool isTimerSet() {
-    return timer != 0;
-  }
-
-  void setTimer(unsigned long time) {
-    timer = time;
-  }
-
-  bool isTimerElapsed(unsigned long time, unsigned long delay) {
-    if (timer == 0) {
-      timer = time;
-      return false;
-    } else {
-      return time - timer >= delay;
-    }
-  }
-
-  void resetTimer() {
-    timer = 0;
   }
 
   char* getErrorMessage() {

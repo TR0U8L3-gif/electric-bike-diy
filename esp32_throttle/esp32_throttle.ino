@@ -40,7 +40,7 @@ void setSystemState(SystemState* newState) {
   systemState = newState;
 }
 
-// Error stste
+// Error state
 StorageErrorState* systemErrorState = nullptr;
 
 // === Communication abstraction ===
@@ -170,8 +170,24 @@ void loop() {
 // == System state function ==
 
 void idle() {
-  sendCommand("\n\n\nCommands: \n 'e' - exit idle state\n 'r' - reboot\n 'c' - calibrate\n");
+  IdleState* currentState = static_cast<IdleState*>(systemState);
   analogWrite(THROTTLE_OUT_PIN, 0);
+  digitalWrite(LED_PIN, LOW);
+
+  unsigned long currentMillis = millis();
+  bool isTimerSet = currentState->isTimerSet();
+  if (!isTimerSet) {
+    currentState->setTimer(currentMillis);
+  } else {
+    bool timeout = currentState->isTimeElapsed(currentMillis, TASK_TIMEOUT);
+    if(timeout) {
+      digitalWrite(LED_PIN, HIGH);
+      systemCommand->readCommand('e');
+      return;
+    }
+  }
+  int timeLeft = (int)((TASK_TIMEOUT - currentState->getTimeElapsed(currentMillis)) / 1000); 
+  sendCommand("\n\n\nCommands: \n 'e' - exit idle state\n 'r' - reboot\n 'c' - calibrate\n\nexit in (" + String(timeLeft) + ")");
   delay(1000);
 }
 
@@ -208,7 +224,7 @@ void storageError() {
   if (!isTimerSet) {
     currentState->setTimer(currentMillis);
   } else {
-    bool timeout = currentState->isTimerElapsed(currentMillis, TASK_TIMEOUT);
+    bool timeout = currentState->isTimeElapsed(currentMillis, TASK_TIMEOUT);
     if(timeout) {
       digitalWrite(LED_PIN, HIGH);
       systemCommand->readCommand('e');
