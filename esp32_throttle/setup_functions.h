@@ -1,6 +1,5 @@
 #ifndef SETUP_FUNCTIONS_H
 #define SETUP_FUNCTIONS_H
-#include <sys/_stdint.h>
 #include <EEPROM.h>
 
 class InitializeThrottleStorageParameters {
@@ -65,7 +64,6 @@ public:
     return throttleStorageResult.storageError;
   }
 };
-
 
 InitializeStorageResult initializeStorage(InitializeStorageParameters params);
 

@@ -57,8 +57,50 @@ public:
 
 class StorageErrorState : public SystemState {
 public:
+  bool throttleCalibrationError;
+  bool ledStatus;
+  unsigned long timer;
+  StorageErrorState(bool throttleCalibrationError_val = false)
+    : throttleCalibrationError(throttleCalibrationError_val),
+      timer(0),
+      ledStatus(true) {}
+
   const char* type() const override {
     return STORAGE_ERROR;
+  }
+
+  bool swithLedStatus(){
+    ledStatus = !ledStatus;
+    return !ledStatus;
+  }
+
+  bool isTimerSet() {
+    return timer != 0;
+  }
+
+  void setTimer(unsigned long time) {
+    timer = time;
+  }
+
+  bool isTimerElapsed(unsigned long time, unsigned long delay) {
+    if (timer == 0) {
+      timer = time;
+      return false;
+    } else {
+      return time - timer >= delay;
+    }
+  }
+
+  void resetTimer() {
+    timer = 0;
+  }
+
+  char* getErrorMessage() {
+    if (throttleCalibrationError) {
+      return "error: Throttle calibration error. Please calibrate the throttle.";
+    } else {
+      return "error: Storage error. Please reset the storage.";
+    }
   }
 };
 

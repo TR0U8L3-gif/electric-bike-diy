@@ -1,6 +1,7 @@
 #include <EEPROM.h>
 #include "setup_functions.h"
 #include "system_state.h"
+#include "system_command.h"
 
 // EEPROM configuration
 #define EEPROM_SIZE 5                  // 2 bytes for min + 2 bytes for max + 1 byte for status
@@ -11,6 +12,7 @@
 // Pins
 const uint16_t THROTTLE_PIN = 2;      // GPIO2 - throttle input (analog)
 const uint16_t THROTTLE_OUT_PIN = 3;  // GPIO3 - throttle/power output (analog)
+const uint16_t LED_PIN = 8;           // GPIO8 - build in LED, HIGH -> off LOW -> on
 
 // Default throttle values
 const uint16_t THROTTLE_VALUE_MAX_DEFAULT = 3500;
@@ -38,16 +40,12 @@ void setSystemState(SystemState* newState) {
   systemState = newState;
 }
 
+// Error stste
+StorageErrorState* systemErrorState = nullptr;
+
 // === Communication abstraction ===
 
-// Reads a command character from available source (Serial / Bluetooth in future)
-char readCommand() {
-  if (Serial.available()) {
-    return Serial.read();
-    // In future: SerialBT.read();
-  }
-  return 0;  // No command
-}
+SystemCommand* systemCommand = new SystemCommand();
 
 // Sends a status message to the active output
 void sendCommand(String message) {
@@ -59,7 +57,11 @@ void sendCommand(String message) {
 
 void setup() {
   Serial.begin(115200);
+
   pinMode(THROTTLE_OUT_PIN, OUTPUT);
+  pinMode(LED_PIN, OUTPUT);
+  
+  digitalWrite(LED_PIN, HIGH);
 
   InitializeThrottleStorageParameters initThrottleParams = InitializeThrottleStorageParameters(
     EEPROM_ADDR_THROTTLE_STATUS,
@@ -90,7 +92,10 @@ void setup() {
   }
 
   if (initResult.storageError()) {
-    setSystemState(new StorageErrorState());
+    StorageErrorState* storageErrorState = 
+      new StorageErrorState(initResult.throttleStorageResult.storageError);
+    systemErrorState = storageErrorState;
+    setSystemState(storageErrorState);
   } else {
     setSystemState(new RunningState());
   }
@@ -99,19 +104,29 @@ void setup() {
 // === Main loop input ===
 
 void handleInput() {
-  char cmd = readCommand();
+  systemCommand->readSerialData();
+  char cmd = systemCommand->getCommand();
   // IDLE
   if (cmd == 'e' && isSystemState(systemState, IDLE)) {
     sendCommand("Exiting idle.");
     setSystemState(new RunningState());
   } else if (cmd == 's' && isSystemState(systemState, IDLE)) {
     sendCommand("Entering running state.");
-    setSystemState(new RunningState()); 
+    setSystemState(new RunningState());
   } else if (cmd == 'r' && isSystemState(systemState, IDLE)) {
     resetESP();
   } else if (cmd == 'c' && isSystemState(systemState, IDLE)) {
     sendCommand("Starting throttle calibration...");
     setSystemState(new ThrottleCalibrationState());
+  } else if (cmd == 't' && isSystemState(systemState, IDLE)) {
+    sendCommand("Clearing throttle storage...");
+    clearThrottleStorage();
+  } else if (cmd == 'a' && isSystemState(systemState, IDLE)) {
+    sendCommand("Clearing all storage...");
+    clearAllStorage();
+  } else if (cmd == 'x' && isSystemState(systemState, IDLE)){
+    sendCommand("Checking init exception");
+    initException();
   }
   // RUNNING
   else if (cmd == 'e' && isSystemState(systemState, RUNNING)) {
@@ -121,7 +136,7 @@ void handleInput() {
   // THROTTLE_CALIBRATION
   else if (cmd == 'e' && isSystemState(systemState, THROTTLE_CALIBRATION)) {
     sendCommand("Exiting throttle calibration - without saving.");
-    setSystemState(new RunningState());
+    setSystemState(new IdleState());
   } else if (cmd == 's' && isSystemState(systemState, THROTTLE_CALIBRATION)) {
     sendCommand("Exiting throttle calibration - saving.");
     saveThrottleCalibration();
@@ -130,13 +145,8 @@ void handleInput() {
   // STORAGE_ERROR
   else if (cmd == 'e' && isSystemState(systemState, STORAGE_ERROR)) {
     sendCommand("Exiting storage error.");
-    setSystemState(new IdleState());
-  } else if (cmd == 'a' && isSystemState(systemState, STORAGE_ERROR)) {
-    sendCommand("Clearing all storage...");
-    clearAllStorage();
-    setSystemState(new IdleState());
-  } 
-
+    setSystemState(new RunningState());
+  }
 }
 
 // === Main loop ===
@@ -159,10 +169,9 @@ void loop() {
 
 // == System state function ==
 
-// TODO(radek): add state to show this message once
-// TODO(radek): add idle timeout and after timeout go to running state 
 void idle() {
-  sendCommand("\nCommands: \n 'e' - exit idle state\n 'r' - reboot\n 'c' - calibrate\n");
+  sendCommand("\n\n\nCommands: \n 'e' - exit idle state\n 'r' - reboot\n 'c' - calibrate\n");
+  analogWrite(THROTTLE_OUT_PIN, 0);
   delay(1000);
 }
 
@@ -188,7 +197,33 @@ void runSystem() {
 }
 
 void storageError() {
-  delay(100);
+  StorageErrorState* currentState = static_cast<StorageErrorState*>(systemState);
+  
+  analogWrite(THROTTLE_OUT_PIN, 0);
+
+  sendCommand(currentState->getErrorMessage());
+  
+  unsigned long currentMillis = millis();
+  bool isTimerSet = currentState->isTimerSet();
+  if (!isTimerSet) {
+    currentState->setTimer(currentMillis);
+  } else {
+    bool timeout = currentState->isTimerElapsed(currentMillis, TASK_TIMEOUT);
+    if(timeout) {
+      digitalWrite(LED_PIN, HIGH);
+      systemCommand->readCommand('e');
+      return;
+    }
+  }
+
+  bool blink = currentState->swithLedStatus();
+  if(blink){
+    digitalWrite(LED_PIN, LOW);
+  } else {
+    digitalWrite(LED_PIN, HIGH);
+  }
+
+  delay(400);
 }
 
 // == System input values ==
@@ -223,7 +258,19 @@ void saveThrottleCalibration() {
   return;
 }
 
-// TODO(radek): add variables to error state an separate clearing storage to All, Only Throttle, etc. 
+void initException(){
+  if (systemErrorState == nullptr) {
+  sendCommand("Initialization was successful");
+  } else {
+    sendCommand("Initialization ended in failure");
+  }
+}
+
+void clearThrottleStorage() {
+  EEPROM.writeUChar(EEPROM_ADDR_THROTTLE_STATUS, 255);
+  EEPROM.commit();
+}
+
 void clearAllStorage() {
   for (size_t i = 0; i < EEPROM_SIZE; i++) {
     EEPROM.write(i, 255);
