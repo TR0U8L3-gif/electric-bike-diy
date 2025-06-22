@@ -2,56 +2,53 @@
 #include "setup_functions.h"
 #include "system_state.h"
 #include "system_command.h"
+#include "delay_timer.h"
 
-// EEPROM configuration
-#define EEPROM_SIZE 5                  // 2 bytes for min + 2 bytes for max + 1 byte for status
+// Constants
+#define CAL_TO_METER 0.0254  // 1 inch = 0.0254 meters
+
+#define THROTTLE_VALUE_MAX_DEFAULT 3500  // default max throttle value
+#define THROTTLE_VALUE_MIN_DEFAULT 1500  // default min throttle value
+
+#define WHEEL_SIZE_DEFAULT 29  // 29" wheel size in inches
+
+#define RUNNING_MODE_DEFAULT 0  // 0 - speedometer, 1 - PAS, 2 - throttle
+
+#define SCALE 100  // 0–100% power scale
+
+#define TASK_TIMEOUT 10000  // 10 seconds in milliseconds
+
+#define THROTTLE_PIN 2      // GPIO2 - throttle input (analog)
+#define THROTTLE_OUT_PIN 3  // GPIO3 - throttle/power output (analog)
+#define SPEEDOMETER_PIN 10  // GPIO10 - speedometer input (digital, interrupt)
+#define LED_PIN 8           // GPIO8 - build in LED, HIGH -> off LOW -> on
+
+#define EEPROM_SIZE 7
 #define EEPROM_ADDR_THROTTLE_MIN 0     // uint16_t
 #define EEPROM_ADDR_THROTTLE_MAX 2     // uint16_t
 #define EEPROM_ADDR_THROTTLE_STATUS 4  // uint8_t
-
-// Pins
-const uint16_t THROTTLE_PIN = 2;      // GPIO2 - throttle input (analog)
-const uint16_t THROTTLE_OUT_PIN = 3;  // GPIO3 - throttle/power output (analog)
-const uint16_t LED_PIN = 8;           // GPIO8 - build in LED, HIGH -> off LOW -> on
-
-// Default throttle values
-const uint16_t THROTTLE_VALUE_MAX_DEFAULT = 3500;
-const uint16_t THROTTLE_VALUE_MIN_DEFAULT = 1500;
-
-// Power scale from 0 to 100
-const uint16_t SCALE = 100;
-
-// 10 seconds timeout for any tasks
-const uint16_t TASK_TIMEOUT = 10000;  // max value: 65535 ~ 65sec ~ 1min
+#define EEPROM_ADDR_WHEEL_SIZE 5       // uint8_t
+#define EEPROM_ADDR_RUNNING_MODE 6     // uint8_t
 
 // Variables
+uint16_t throttleValue = 0;    // 0–4095 throttle value scale
+uint8_t speedometerClick = 0;  // 0-1 speedometer click scale
+uint8_t powerValue = 0;        // 0–100% power scale
+uint8_t speedValue = 0;        // km/h speed scale
+
 uint16_t throttleValueMax = THROTTLE_VALUE_MAX_DEFAULT;
 uint16_t throttleValueMin = THROTTLE_VALUE_MIN_DEFAULT;
-uint16_t throttleValue = 0;
-uint16_t powerValue = 0;
+uint8_t wheelSize = WHEEL_SIZE_DEFAULT;
 
-// System state
-SystemState* systemState = nullptr;
-
-void setSystemState(SystemState* newState) {
-  if (systemState != nullptr) {
-    delete systemState;
-  }
-  systemState = newState;
-}
-
-// Error state
 StorageErrorState* systemErrorState = nullptr;
 
-// === Communication abstraction ===
+SystemState* systemState = nullptr;
+
+RunningMode runningMode = runningModeFromInt(RUNNING_MODE_DEFAULT);
 
 SystemCommand* systemCommand = new SystemCommand();
 
-// Sends a status message to the active output
-void sendCommand(String message) {
-  Serial.println(message);
-  // In future: SerialBT.println(message);
-}
+DelayTimer* delayTimer = new DelayTimer();
 
 // === Setup logic ===
 
@@ -59,10 +56,12 @@ void setup() {
   Serial.begin(115200);
 
   pinMode(THROTTLE_OUT_PIN, OUTPUT);
+  pinMode(SPEEDOMETER_PIN, INPUT);
   pinMode(LED_PIN, OUTPUT);
-  
+
   digitalWrite(LED_PIN, HIGH);
 
+  // TODO(radek): Implement reading wheelsize and mode
   InitializeThrottleStorageParameters initThrottleParams = InitializeThrottleStorageParameters(
     EEPROM_ADDR_THROTTLE_STATUS,
     EEPROM_ADDR_THROTTLE_MIN,
@@ -92,39 +91,45 @@ void setup() {
   }
 
   if (initResult.storageError()) {
-    StorageErrorState* storageErrorState = 
+    StorageErrorState* storageErrorState =
       new StorageErrorState(initResult.throttleStorageResult.storageError);
     systemErrorState = storageErrorState;
     setSystemState(storageErrorState);
   } else {
-    setSystemState(new RunningState());
+    setSystemState(new RunningState(runningMode));
   }
+
+  delayTimer->reset();
 }
 
 // === Main loop input ===
 
-void handleInput() {
+bool handleEvent() {
   systemCommand->readSerialData();
   char cmd = systemCommand->getCommand();
+  bool updatedSystemState = false;
   // IDLE
   if (cmd == 'e' && isSystemState(systemState, IDLE)) {
     sendCommand("Exiting idle.");
-    setSystemState(new RunningState());
+    setSystemState(new RunningState(runningMode));
+    updatedSystemState = true;
   } else if (cmd == 's' && isSystemState(systemState, IDLE)) {
     sendCommand("Entering running state.");
-    setSystemState(new RunningState());
+    setSystemState(new RunningState(runningMode));
+    updatedSystemState = true;
   } else if (cmd == 'r' && isSystemState(systemState, IDLE)) {
     resetESP();
   } else if (cmd == 'c' && isSystemState(systemState, IDLE)) {
     sendCommand("Starting throttle calibration...");
     setSystemState(new ThrottleCalibrationState());
+    updatedSystemState = true;
   } else if (cmd == 't' && isSystemState(systemState, IDLE)) {
     sendCommand("Clearing throttle storage...");
     clearThrottleStorage();
   } else if (cmd == 'a' && isSystemState(systemState, IDLE)) {
     sendCommand("Clearing all storage...");
     clearAllStorage();
-  } else if (cmd == 'x' && isSystemState(systemState, IDLE)){
+  } else if (cmd == 'x' && isSystemState(systemState, IDLE)) {
     sendCommand("Checking init exception");
     initException();
   }
@@ -132,28 +137,38 @@ void handleInput() {
   else if (cmd == 'e' && isSystemState(systemState, RUNNING)) {
     sendCommand("Stopping program.");
     setSystemState(new IdleState());
+    updatedSystemState = true;
   }
   // THROTTLE_CALIBRATION
   else if (cmd == 'e' && isSystemState(systemState, THROTTLE_CALIBRATION)) {
     sendCommand("Exiting throttle calibration - without saving.");
     setSystemState(new IdleState());
+    updatedSystemState = true;
   } else if (cmd == 's' && isSystemState(systemState, THROTTLE_CALIBRATION)) {
     sendCommand("Exiting throttle calibration - saving.");
     saveThrottleCalibration();
-    setSystemState(new RunningState());
+    setSystemState(new RunningState(runningMode));
+    updatedSystemState = true;
   }
   // STORAGE_ERROR
   else if (cmd == 'e' && isSystemState(systemState, STORAGE_ERROR)) {
     sendCommand("Exiting storage error.");
-    setSystemState(new RunningState());
-  }
+    setSystemState(new RunningState(runningMode));
+    updatedSystemState = true;
+  } 
+
+  return updatedSystemState;
 }
 
 // === Main loop ===
 
 void loop() {
-  handleInput();
-
+  bool updatedState = handleEvent();
+  if (updatedState) {
+    delayTimer->reset();
+  } else {
+    delayTimer->updateTimer(millis());
+  }
   if (isSystemState(systemState, RUNNING)) {
     runSystem();
   } else if (isSystemState(systemState, THROTTLE_CALIBRATION)) {
@@ -180,69 +195,102 @@ void idle() {
     currentState->setTimer(currentMillis);
   } else {
     bool timeout = currentState->isTimeElapsed(currentMillis, TASK_TIMEOUT);
-    if(timeout) {
+    if (timeout) {
       digitalWrite(LED_PIN, HIGH);
       systemCommand->readCommand('e');
       return;
     }
   }
-  int timeLeft = (int)((TASK_TIMEOUT - currentState->getTimeElapsed(currentMillis)) / 1000); 
-  sendCommand("\n\n\nCommands: \n 'e' - exit idle state\n 'r' - reboot\n 'c' - calibrate\n\nexit in (" + String(timeLeft) + ")");
-  delay(1000);
+  if (delayTimer->elapsed1000ms()) {
+    int timeLeft = (int)floor((TASK_TIMEOUT - currentState->getTimeElapsed(currentMillis)) / 1000);
+    sendCommand("\n\n\nCommands: \n 'e' - exit idle state\n 'r' - reboot\n 'c' - calibrate\n\nexit in (" + String(timeLeft) + ")");
+  }
 }
 
 void calibrateThrottle() {
-  ThrottleCalibrationState* currentState = static_cast<ThrottleCalibrationState*>(systemState);
-  // disable output during calibration
   analogWrite(THROTTLE_OUT_PIN, 0);
-
-  // read current throttle values
-  uint16_t val = analogRead(THROTTLE_PIN);
-  currentState->updateCalibrationValues(val);
-  sendCommand("Reading: " + String(val) + " | MAX: " + String(currentState->maxValue) + " | MIN: " + String(currentState->minValue));
-  delay(100);
-}
-
-void runSystem() {
-  throttleValue = analogRead(THROTTLE_PIN);
-  powerValue = throttleToPower(throttleValue);
-  analogWrite(THROTTLE_OUT_PIN, powerValue * 2.55);  // scale 0–100% to 0–255
-
-  sendCommand("Power: " + String(powerValue));
-  delay(100);
+  
+  ThrottleCalibrationState* currentState = static_cast<ThrottleCalibrationState*>(systemState);
+  
+  if (delayTimer->elapsed200ms()) {
+    uint16_t val = analogRead(THROTTLE_PIN);
+    currentState->updateCalibrationValues(val);
+    sendCommand("Reading: " + String(val) + " | MAX: " + String(currentState->maxValue) + " | MIN: " + String(currentState->minValue));
+  }
 }
 
 void storageError() {
-  StorageErrorState* currentState = static_cast<StorageErrorState*>(systemState);
-  
   analogWrite(THROTTLE_OUT_PIN, 0);
 
-  sendCommand(currentState->getErrorMessage());
-  
+  StorageErrorState* currentState = static_cast<StorageErrorState*>(systemState);
+
   unsigned long currentMillis = millis();
   bool isTimerSet = currentState->isTimerSet();
   if (!isTimerSet) {
     currentState->setTimer(currentMillis);
   } else {
     bool timeout = currentState->isTimeElapsed(currentMillis, TASK_TIMEOUT);
-    if(timeout) {
+    if (timeout) {
       digitalWrite(LED_PIN, HIGH);
       systemCommand->readCommand('e');
       return;
     }
   }
 
-  bool blink = currentState->swithLedStatus();
-  if(blink){
-    digitalWrite(LED_PIN, LOW);
-  } else {
-    digitalWrite(LED_PIN, HIGH);
+  if (delayTimer->elapsed400ms()) {
+    bool blink = currentState->swithLedStatus();
+    if (blink) {
+      digitalWrite(LED_PIN, LOW);
+    } else {
+      digitalWrite(LED_PIN, HIGH);
+    }
   }
-
-  delay(400);
+  if (delayTimer->elapsed800ms()) {
+    sendCommand(currentState->getErrorMessage());
+  }
 }
 
-// == System input values ==
+void runSystem() {
+  switch (runningMode) {
+    case THROTTLE:
+      return runSystemThrottle();
+    case SPEEDOMETER:
+      return runSystemSpeedometer();
+    case PAS:
+      return runSystemPas();
+    default:
+      return runSystemSpeedometer();
+  }
+}
+
+void runSystemThrottle() {
+  throttleValue = analogRead(THROTTLE_PIN);
+  powerValue = throttleToPower(throttleValue);
+  analogWrite(THROTTLE_OUT_PIN, powerValue * 2.55);  // scale 0–100% to 0–255
+
+  if (delayTimer->elapsed100ms()) {
+    sendCommand("Power: " + String(powerValue) + " Throttle: " + String(throttleValue));
+  }
+}
+
+void runSystemSpeedometer() {
+  throttleValue = analogRead(THROTTLE_PIN);
+  speedometerClick = digitalRead(SPEEDOMETER_PIN);
+  powerValue = 100 - throttleToPower(throttleValue);
+  analogWrite(THROTTLE_OUT_PIN, powerValue * 2.55);  // scale 0–100% to 0–255
+
+  if(delayTimer->elapsed100ms()) {
+    sendCommand("Power: " + String(powerValue) + " Throttle: " + String(throttleValue) + " Click: " + String(speedometerClick));
+  }
+}
+
+void runSystemPas() {
+  if (delayTimer->elapsed100ms()) {
+    sendCommand("Power: 0 (placeholder for PAS mode)");
+  }
+}
+
+// == System event values ==
 
 void resetESP() {
   for (size_t i = 5; i > 0; i--) {
@@ -274,9 +322,9 @@ void saveThrottleCalibration() {
   return;
 }
 
-void initException(){
+void initException() {
   if (systemErrorState == nullptr) {
-  sendCommand("Initialization was successful");
+    sendCommand("Initialization was successful");
   } else {
     sendCommand("Initialization ended in failure");
   }
@@ -296,6 +344,19 @@ void clearAllStorage() {
 
 // == Other functions ==
 
+// Sets the system state to a new state
+void setSystemState(SystemState* newState) {
+  if (systemState != nullptr) {
+    delete systemState;
+  }
+  systemState = newState;
+}
+
+// TODO(radek): Implement Bluetooth communication
+void sendCommand(String message) {
+  Serial.println(message);
+}
+
 // Converts analog throttle value to power percentage (0–100%)
 uint16_t throttleToPower(uint16_t value) {
   uint16_t result = value;
@@ -304,6 +365,7 @@ uint16_t throttleToPower(uint16_t value) {
   return map_uint16_t(result, throttleValueMin, throttleValueMax, 0, SCALE);
 }
 
+// Maps a value from one range to another
 uint16_t map_uint16_t(uint16_t x, uint16_t in_min, uint16_t in_max, uint16_t out_min, uint16_t out_max) {
   const uint16_t run = in_max - in_min;
   if (run == 0) {

@@ -16,7 +16,7 @@ InitializeThrottleStorageResult initializeThrottleStorage(InitializeThrottleStor
     isCalibrated = true;
 
     throttleValueMinStorage = EEPROM.readUShort(params.eepromAddrMin);
-    throttleValueMaxStorage =  EEPROM.readUShort(params.eepromAddrMax);
+    throttleValueMaxStorage = EEPROM.readUShort(params.eepromAddrMax);
 
     if (throttleValueMinStorage < 0 || throttleValueMinStorage > 4095) {
       storageError = true;
@@ -35,11 +35,10 @@ InitializeThrottleStorageResult initializeThrottleStorage(InitializeThrottleStor
   }
 
   return InitializeThrottleStorageResult(
-    storageError, 
-    isCalibrated, 
-    throttleValueMin, 
-    throttleValueMax
-  );
+    storageError,
+    isCalibrated,
+    throttleValueMin,
+    throttleValueMax);
 }
 
 // Initializes storage
@@ -50,6 +49,5 @@ InitializeStorageResult initializeStorage(InitializeStorageParameters params) {
   InitializeThrottleStorageResult throttleResult = initializeThrottleStorage(params.throttleStorageParams);
 
   return InitializeStorageResult(
-    throttleResult
-  );
+    throttleResult);
 }

@@ -35,7 +35,7 @@ public:
   }
 
   unsigned long getTimeElapsed(unsigned long time) {
-    return time - timer; 
+    return time - timer;
   }
 
   bool isTimeElapsed(unsigned long time, unsigned long delay) {
@@ -46,7 +46,6 @@ public:
       return time - timer >= delay;
     }
   }
-
 };
 
 class IdleState : public SystemState {
@@ -56,8 +55,19 @@ public:
   }
 };
 
+enum RunningMode {
+  THROTTLE,
+  SPEEDOMETER,
+  PAS
+};
+
 class RunningState : public SystemState {
 public:
+  RunningMode mode;
+
+  RunningState(RunningMode mode_val)
+    : mode(mode_val) {}
+
   const char* type() const override {
     return RUNNING;
   }
@@ -117,5 +127,9 @@ public:
 };
 
 bool isSystemState(SystemState* state, const char* type);
+
+uint8_t runningModeToInt(RunningMode value);
+
+RunningMode runningModeFromInt(uint8_t value);
 
 #endif

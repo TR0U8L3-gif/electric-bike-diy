@@ -25,14 +25,14 @@ public:
   }
 
   void readCommand(char value) {
-    if(command != 0) return;
+    if (command != 0) return;
     command = value;
   }
 
   char readSerialData() {
     if (Serial.available()) {
       char c = Serial.read();
-      if(serialCommand == 0){
+      if (serialCommand == 0) {
         serialCommand = c;
       }
       // clear the rest of the serial data
