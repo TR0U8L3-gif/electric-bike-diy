@@ -263,7 +263,7 @@ void runSystem() {
 void runSystemThrottle() {
   throttleValue = analogRead(THROTTLE_PIN);
   powerValue = throttleToPower(throttleValue, throttleValueMin, throttleValueMax);
-  analogWrite(THROTTLE_OUT_PIN, powerValue * 2.55);  // scale 0–100% to 0–255
+  analogWrite(THROTTLE_OUT_PIN, map(powerValue, 0, 100, 0, 255));  // scale 0–100% to 0–255
 
   if (delayTimer->elapsed100ms()) {
     sendCommand("Power: " + String(powerValue) + " Throttle: " + String(throttleValue));
@@ -288,16 +288,18 @@ void runSystemSpeedometer() {
   }
 
   bool isFasterThan1kmh = (currentMillis - speedometerTime) <= timeFor1Kmh(wheelSize);
-  if (!isFasterThan1kmh || speedometerTimeDelta == 0) {
+  bool isSpeedhreshold = speedDeltaTimeThreshold((currentMillis - speedometerTime), wheelSize, speedometerSpeed);
+  if (!isFasterThan1kmh || isSpeedhreshold || speedometerTimeDelta == 0) {
     speedometerSpeed = (float)0;
     speedometerTimeDelta = 0;
-  } else {
-    speedometerSpeed = (wheelSize * CAL_TO_METER * PI) / ((float)speedometerTimeDelta / 1000.0f);
+  }
+  else {
+    speedometerSpeed = computeSpeed(wheelSize, speedometerTimeDelta);
   }
 
   powerValue = 100 - throttleToPower(throttleValue, throttleValueMin, throttleValueMax);
 
-  analogWrite(THROTTLE_OUT_PIN, powerValue * 2.55);  // scale 0–100% to 0–255
+  analogWrite(THROTTLE_OUT_PIN, map(powerValue, 0, 100, 0, 255));  // scale 0–100% to 0–255
 
   if (delayTimer->elapsed100ms() || speedometerClick) {
     sendCommand("Power: " + String(powerValue) + " Speed: " + String(speedometerSpeed * MS_TO_KMS) + "km\\h Throttle: " + String(throttleValue) + " Click: " + String(speedometerClick ? 1 : 0) + "/" + String(speedometerValue ? 1 : 0) + "=" + String(speedometerClickVerified ? 1 : 0) + " SpeedometerTimeDelta: " + String(speedometerTimeDelta));

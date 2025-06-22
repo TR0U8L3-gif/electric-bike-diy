@@ -14,4 +14,10 @@ unsigned long timeFor1Kmh(uint8_t wheel_size);
 
 uint16_t throttleToPower(uint16_t value, uint16_t throttleValueMin, uint16_t throttleValueMax);
 
+float computeSpeed(uint8_t wheelSizeInInches, unsigned long timeDeltaMs);
+
+unsigned long computeDeltaTime(uint8_t wheel_size, float speed_ms);
+
+bool speedDeltaTimeThreshold(unsigned long time, uint8_t wheel_size, float speed_ms);
+
 #endif
