@@ -3,20 +3,15 @@
 #include "system_state.h"
 #include "system_command.h"
 #include "delay_timer.h"
+#include "system_functions.h"
 
 // Constants
-#define CAL_TO_METER 0.0254  // 1 inch = 0.0254 meters
 
 #define THROTTLE_VALUE_MAX_DEFAULT 3500  // default max throttle value
 #define THROTTLE_VALUE_MIN_DEFAULT 1500  // default min throttle value
-
-#define WHEEL_SIZE_DEFAULT 29  // 29" wheel size in inches
-
-#define RUNNING_MODE_DEFAULT 0  // 0 - speedometer, 1 - PAS, 2 - throttle
-
-#define SCALE 100  // 0–100% power scale
-
-#define TASK_TIMEOUT 10000  // 10 seconds in milliseconds
+#define WHEEL_SIZE_DEFAULT 29            // 29" wheel size in inches
+#define RUNNING_MODE_DEFAULT 0           // 0 - speedometer, 1 - PAS, 2 - throttle
+#define TASK_TIMEOUT 10000               // 10 seconds in milliseconds
 
 #define THROTTLE_PIN 2      // GPIO2 - throttle input (analog)
 #define THROTTLE_OUT_PIN 3  // GPIO3 - throttle/power output (analog)
@@ -31,10 +26,12 @@
 #define EEPROM_ADDR_RUNNING_MODE 6     // uint8_t
 
 // Variables
-uint16_t throttleValue = 0;    // 0–4095 throttle value scale
-uint8_t speedometerClick = 0;  // 0-1 speedometer click scale
-uint8_t powerValue = 0;        // 0–100% power scale
-uint8_t speedValue = 0;        // km/h speed scale
+uint16_t throttleValue = 0;              // 0–4095 throttle value scale
+uint8_t powerValue = 0;                  // 0–100% power scale
+float speedometerSpeed = 0;              // m/s speed scale
+bool speedometerValue = false;           // 0-1 speedometer value scale "click"
+unsigned long speedometerTime = 0;       // speedometer time in milliseconds
+unsigned long speedometerTimeDelta = 0;  // speedometer time delta in milliseconds
 
 uint16_t throttleValueMax = THROTTLE_VALUE_MAX_DEFAULT;
 uint16_t throttleValueMin = THROTTLE_VALUE_MIN_DEFAULT;
@@ -155,7 +152,7 @@ bool handleEvent() {
     sendCommand("Exiting storage error.");
     setSystemState(new RunningState(runningMode));
     updatedSystemState = true;
-  } 
+  }
 
   return updatedSystemState;
 }
@@ -209,9 +206,9 @@ void idle() {
 
 void calibrateThrottle() {
   analogWrite(THROTTLE_OUT_PIN, 0);
-  
+
   ThrottleCalibrationState* currentState = static_cast<ThrottleCalibrationState*>(systemState);
-  
+
   if (delayTimer->elapsed200ms()) {
     uint16_t val = analogRead(THROTTLE_PIN);
     currentState->updateCalibrationValues(val);
@@ -265,7 +262,7 @@ void runSystem() {
 
 void runSystemThrottle() {
   throttleValue = analogRead(THROTTLE_PIN);
-  powerValue = throttleToPower(throttleValue);
+  powerValue = throttleToPower(throttleValue, throttleValueMin, throttleValueMax);
   analogWrite(THROTTLE_OUT_PIN, powerValue * 2.55);  // scale 0–100% to 0–255
 
   if (delayTimer->elapsed100ms()) {
@@ -275,12 +272,35 @@ void runSystemThrottle() {
 
 void runSystemSpeedometer() {
   throttleValue = analogRead(THROTTLE_PIN);
-  speedometerClick = digitalRead(SPEEDOMETER_PIN);
-  powerValue = 100 - throttleToPower(throttleValue);
+  bool speedometerClick = digitalRead(SPEEDOMETER_PIN);
+
+  bool speedometerClickVerified = false;
+  unsigned long currentMillis = millis();
+
+  if (speedometerClick == true && speedometerValue == false) {
+    speedometerClickVerified = true;
+    speedometerValue = true;
+    speedometerTimeDelta = currentMillis - speedometerTime;
+    speedometerTime = currentMillis;
+  }
+  if (speedometerClick == false && speedometerValue == true) {
+    speedometerValue = false;
+  }
+
+  bool isFasterThan1kmh = (currentMillis - speedometerTime) <= timeFor1Kmh(wheelSize);
+  if (!isFasterThan1kmh || speedometerTimeDelta == 0) {
+    speedometerSpeed = (float)0;
+    speedometerTimeDelta = 0;
+  } else {
+    speedometerSpeed = (wheelSize * CAL_TO_METER * PI) / ((float)speedometerTimeDelta / 1000.0f);
+  }
+
+  powerValue = 100 - throttleToPower(throttleValue, throttleValueMin, throttleValueMax);
+
   analogWrite(THROTTLE_OUT_PIN, powerValue * 2.55);  // scale 0–100% to 0–255
 
-  if(delayTimer->elapsed100ms()) {
-    sendCommand("Power: " + String(powerValue) + " Throttle: " + String(throttleValue) + " Click: " + String(speedometerClick));
+  if (delayTimer->elapsed100ms() || speedometerClick) {
+    sendCommand("Power: " + String(powerValue) + " Speed: " + String(speedometerSpeed * MS_TO_KMS) + "km\\h Throttle: " + String(throttleValue) + " Click: " + String(speedometerClick ? 1 : 0) + "/" + String(speedometerValue ? 1 : 0) + "=" + String(speedometerClickVerified ? 1 : 0) + " SpeedometerTimeDelta: " + String(speedometerTimeDelta));
   }
 }
 
@@ -355,24 +375,4 @@ void setSystemState(SystemState* newState) {
 // TODO(radek): Implement Bluetooth communication
 void sendCommand(String message) {
   Serial.println(message);
-}
-
-// Converts analog throttle value to power percentage (0–100%)
-uint16_t throttleToPower(uint16_t value) {
-  uint16_t result = value;
-  if (result > throttleValueMax) result = throttleValueMax;
-  if (result < throttleValueMin) result = throttleValueMin;
-  return map_uint16_t(result, throttleValueMin, throttleValueMax, 0, SCALE);
-}
-
-// Maps a value from one range to another
-uint16_t map_uint16_t(uint16_t x, uint16_t in_min, uint16_t in_max, uint16_t out_min, uint16_t out_max) {
-  const uint16_t run = in_max - in_min;
-  if (run == 0) {
-    log_e("map(): Invalid input range, min == max");
-    return -1;  // AVR returns -1, SAM returns 0
-  }
-  const uint16_t rise = out_max - out_min;
-  const uint16_t delta = x - in_min;
-  return (delta * rise) / run + out_min;
 }
