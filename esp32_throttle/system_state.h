@@ -103,9 +103,11 @@ public:
 class StorageErrorState : public SystemState {
 public:
   bool throttleCalibrationError;
+  bool bikeCalibrationError;
   bool ledStatus;
-  StorageErrorState(bool throttleCalibrationError_val = false)
+  StorageErrorState(bool throttleCalibrationError_val = false, bool bikeCalibrationError_val = false)
     : throttleCalibrationError(throttleCalibrationError_val),
+      bikeCalibrationError(bikeCalibrationError_val),
       ledStatus(true) {}
 
   const char* type() const override {

@@ -24,6 +24,31 @@ uint16_t throttleToPower(uint16_t value, uint16_t throttleValueMin, uint16_t thr
   return map_uint16_t(result, throttleValueMin, throttleValueMax, 0, SCALE);
 }
 
+uint16_t interpolatePower(float s, float s1, float s2, uint16_t p1, uint16_t p2) {
+  if (s2 == s1) return p1;
+  float t = (s - s1) / (s2 - s1);
+  return uint16_t(p1 + t * (p2 - p1));
+}
+
+uint16_t assistToPower(float speed_ms, AssistCurve& curve) {
+  if (speed_ms < curve.level.speed_ms_min || speed_ms > curve.level.speed_ms_max) {
+    return 0;
+  }
+
+  AssistPoint& p1 = curve.p1;
+  AssistPoint& p2 = curve.p2;
+  AssistPoint& p3 = curve.p3;
+  AssistPoint& p4 = curve.p4;
+
+  if (speed_ms <= p2.speed_ms) {
+    return interpolatePower(speed_ms, p1.speed_ms, p2.speed_ms, p1.power, p2.power);
+  } else if (speed_ms <= p3.speed_ms) {
+    return interpolatePower(speed_ms, p2.speed_ms, p3.speed_ms, p2.power, p3.power);
+  } else {
+    return interpolatePower(speed_ms, p3.speed_ms, p4.speed_ms, p3.power, p4.power);
+  }
+}
+
 float computeSpeed(uint8_t wheelSizeInInches, unsigned long timeDeltaMs) {
   if (timeDeltaMs == 0) return 0.0f;
   return (wheelSizeInInches * CAL_TO_METER * PI) / ((float)timeDeltaMs / 1000.0f);

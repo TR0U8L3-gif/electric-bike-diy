@@ -18,12 +18,13 @@
 #define SPEEDOMETER_PIN 10  // GPIO10 - speedometer input (digital, interrupt)
 #define LED_PIN 8           // GPIO8 - build in LED, HIGH -> off LOW -> on
 
-#define EEPROM_SIZE 7
-#define EEPROM_ADDR_THROTTLE_MIN 0     // uint16_t
-#define EEPROM_ADDR_THROTTLE_MAX 2     // uint16_t
-#define EEPROM_ADDR_THROTTLE_STATUS 4  // uint8_t
-#define EEPROM_ADDR_WHEEL_SIZE 5       // uint8_t
-#define EEPROM_ADDR_RUNNING_MODE 6     // uint8_t
+#define EEPROM_SIZE 10
+#define EEPROM_ADDR_THROTTLE_MIN 0      // 0-1 uint16_t
+#define EEPROM_ADDR_THROTTLE_MAX 2      // 2-3 uint16_t
+#define EEPROM_ADDR_THROTTLE_STATUS 4   // 4-4 uint8_t
+#define EEPROM_ADDR_WHEEL_SIZE 5        // 5-6 uint16_t
+#define EEPROM_ADDR_RUNNING_MODE_INT 7  // 7-8 uint16_t
+#define EEPROM_ADDR_BIKE_STATUS 9       // 9-9 uint8_t
 
 // Variables
 uint16_t throttleValue = 0;              // 0–4095 throttle value scale
@@ -33,15 +34,16 @@ bool speedometerValue = false;           // 0-1 speedometer value scale "click"
 unsigned long speedometerTime = 0;       // speedometer time in milliseconds
 unsigned long speedometerTimeDelta = 0;  // speedometer time delta in milliseconds
 
-uint16_t throttleValueMax = THROTTLE_VALUE_MAX_DEFAULT;
-uint16_t throttleValueMin = THROTTLE_VALUE_MIN_DEFAULT;
-uint8_t wheelSize = WHEEL_SIZE_DEFAULT;
+uint16_t throttleValueMax = THROTTLE_VALUE_MAX_DEFAULT;  // storage implemented
+uint16_t throttleValueMin = THROTTLE_VALUE_MIN_DEFAULT;  // storage implemented
+uint16_t wheelSize = WHEEL_SIZE_DEFAULT;                 // storage implemented
+uint16_t runningModeInt = RUNNING_MODE_DEFAULT;          // storage implemented
 
 StorageErrorState* systemErrorState = nullptr;
 
 SystemState* systemState = nullptr;
 
-RunningMode runningMode = runningModeFromInt(RUNNING_MODE_DEFAULT);
+RunningMode runningMode = runningModeFromInt(runningModeInt);
 
 SystemCommand* systemCommand = new SystemCommand();
 
@@ -58,7 +60,14 @@ void setup() {
 
   digitalWrite(LED_PIN, HIGH);
 
-  // TODO(radek): Implement reading wheelsize and mode
+  // TODO(radek): Implement reading Assist -> Levels Points and AssistCurve
+  InitializeBikeStorageParameters initBikeParams = InitializeBikeStorageParameters(
+    EEPROM_ADDR_BIKE_STATUS,
+    EEPROM_ADDR_WHEEL_SIZE,
+    EEPROM_ADDR_RUNNING_MODE_INT,
+    WHEEL_SIZE_DEFAULT,
+    RUNNING_MODE_DEFAULT);
+
   InitializeThrottleStorageParameters initThrottleParams = InitializeThrottleStorageParameters(
     EEPROM_ADDR_THROTTLE_STATUS,
     EEPROM_ADDR_THROTTLE_MIN,
@@ -68,9 +77,25 @@ void setup() {
 
   InitializeStorageParameters initParams = InitializeStorageParameters(
     EEPROM_SIZE,
-    initThrottleParams);
+    initThrottleParams,
+    initBikeParams);
 
   InitializeStorageResult initResult = initializeStorage(initParams);
+
+  InitializeBikeStorageResult initBikeResult = initResult.bikeStorageResult;
+  if (!initBikeResult.storageError) {
+    if (initBikeResult.isCalibrated) {
+      wheelSize = initBikeResult.wheelSize;
+      runningMode = runningModeFromInt(initBikeResult.runningModeint);
+      sendCommand("Loaded bike calibration values.");
+      sendCommand("wheel size: " + String(initBikeResult.wheelSize));
+      sendCommand("running mode: " + String(initBikeResult.runningModeint));
+    } else {
+      sendCommand("Bike calibration is not set - used default values.");
+    }
+  } else {
+    sendCommand("Invalid bike calibration values received from storage - used default values.");
+  }
 
   InitializeThrottleStorageResult initThrottleResult = initResult.throttleStorageResult;
   if (!initThrottleResult.storageError) {
@@ -89,7 +114,10 @@ void setup() {
 
   if (initResult.storageError()) {
     StorageErrorState* storageErrorState =
-      new StorageErrorState(initResult.throttleStorageResult.storageError);
+      new StorageErrorState(
+        initResult.throttleStorageResult.storageError,
+        initResult.bikeStorageResult.storageError);
+
     systemErrorState = storageErrorState;
     setSystemState(storageErrorState);
   } else {
@@ -288,16 +316,34 @@ void runSystemSpeedometer() {
   }
 
   bool isFasterThan1kmh = (currentMillis - speedometerTime) <= timeFor1Kmh(wheelSize);
-  bool isSpeedhreshold = speedDeltaTimeThreshold((currentMillis - speedometerTime), wheelSize, speedometerSpeed);
-  if (!isFasterThan1kmh || isSpeedhreshold || speedometerTimeDelta == 0) {
+  bool isSpeedThreshold = speedDeltaTimeThreshold((currentMillis - speedometerTime), wheelSize, speedometerSpeed);
+  if (!isFasterThan1kmh || isSpeedThreshold || speedometerTimeDelta == 0) {
     speedometerSpeed = (float)0;
     speedometerTimeDelta = 0;
-  }
-  else {
+  } else {
     speedometerSpeed = computeSpeed(wheelSize, speedometerTimeDelta);
   }
 
-  powerValue = 100 - throttleToPower(throttleValue, throttleValueMin, throttleValueMax);
+  AssistCurve assistCurveLow = {
+    // AssistPoint (curve points)
+    { 0.0 * KMH_TO_MS, 30 },
+    { 6.0 * KMH_TO_MS, 80 },
+    { 12.0 * KMH_TO_MS, 90 },
+    { 15.0 * KMH_TO_MS, 0 },
+
+    // AssistLevel (active range)
+    { 0.0 * KMH_TO_MS, 15.0 * KMH_TO_MS }
+  };
+
+  // TODO(radek): cut power off until power will increase to +1m/s from the lowest speed point
+  unsigned int throttlePower = throttleToPower(throttleValue, throttleValueMin, throttleValueMax);
+  unsigned int assistPower = assistToPower(speedometerSpeed, assistCurveLow);
+
+  if (throttlePower > 30) {
+    powerValue = 0;
+  } else {
+    powerValue = assistPower;
+  }
 
   analogWrite(THROTTLE_OUT_PIN, map(powerValue, 0, 100, 0, 255));  // scale 0–100% to 0–255
 
@@ -363,6 +409,9 @@ void clearAllStorage() {
   }
   EEPROM.commit();
 }
+// TODO(radek): configure wheelSize char to int
+// TODO(radek): configure running mode provide number
+// TODO(radek): clear bike storage
 
 // == Other functions ==
 
