@@ -13,8 +13,8 @@
 #define RUNNING_MODE_DEFAULT 0           // 0 - speedometer, 1 - PAS, 2 - throttle
 #define TASK_TIMEOUT 10000               // 10 seconds in milliseconds
 
-#define THROTTLE_PIN 2      // GPIO2 - throttle input (analog)
-#define THROTTLE_OUT_PIN 3  // GPIO3 - throttle/power output (analog)
+#define THROTTLE_PIN 4      // GPIO4 - throttle input (analog)
+#define THROTTLE_OUT_PIN 2  // GPIO2 - throttle/power output (analog)
 #define SPEEDOMETER_PIN 10  // GPIO10 - speedometer input (digital, interrupt)
 #define LED_PIN 8           // GPIO8 - build in LED, HIGH -> off LOW -> on
 
@@ -151,7 +151,11 @@ bool handleEvent() {
   } else if (cmd == 't' && isSystemState(systemState, IDLE)) {
     sendCommand("Clearing throttle storage...");
     clearThrottleStorage();
-  } else if (cmd == 'a' && isSystemState(systemState, IDLE)) {
+  } else if (cmd == 'b' && isSystemState(systemState, IDLE)) {
+    sendCommand("Clearing bike storage...");
+    clearBikeStorage();
+  } 
+  else if (cmd == 'a' && isSystemState(systemState, IDLE)) {
     sendCommand("Clearing all storage...");
     clearAllStorage();
   } else if (cmd == 'x' && isSystemState(systemState, IDLE)) {
@@ -228,7 +232,7 @@ void idle() {
   }
   if (delayTimer->elapsed1000ms()) {
     int timeLeft = (int)floor((TASK_TIMEOUT - currentState->getTimeElapsed(currentMillis)) / 1000);
-    sendCommand("\n\n\nCommands: \n 'e' - exit idle state\n 'r' - reboot\n 'c' - calibrate\n\nexit in (" + String(timeLeft) + ")");
+    sendCommand("\n\n\nCommands: \n 'e' - exit idle state\n 'r' - reboot\n 'c' - calibrate\n 'x' - check init exception\n 't' - clear throttle storage\n 'b' - clear bike storage\n 'a' - clear all storages\n\nexit in (" + String(timeLeft) + ")");
   }
 }
 
@@ -332,7 +336,7 @@ void runSystemSpeedometer() {
     { 15.0 * KMH_TO_MS, 0 },
 
     // AssistLevel (active range)
-    { 0.0 * KMH_TO_MS, 15.0 * KMH_TO_MS }
+    { 3.0 * KMH_TO_MS, 15.0 * KMH_TO_MS }
   };
 
   // TODO(radek): cut power off until power will increase to +1m/s from the lowest speed point
@@ -403,6 +407,11 @@ void clearThrottleStorage() {
   EEPROM.commit();
 }
 
+void clearBikeStorage() {
+  EEPROM.writeUChar(EEPROM_ADDR_BIKE_STATUS, 255);
+  EEPROM.commit();
+}
+
 void clearAllStorage() {
   for (size_t i = 0; i < EEPROM_SIZE; i++) {
     EEPROM.write(i, 255);
@@ -411,7 +420,6 @@ void clearAllStorage() {
 }
 // TODO(radek): configure wheelSize char to int
 // TODO(radek): configure running mode provide number
-// TODO(radek): clear bike storage
 
 // == Other functions ==
 
