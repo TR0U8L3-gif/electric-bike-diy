@@ -139,7 +139,13 @@ bool handleEvent() {
     setSystemState(new RunningState());
     updatedSystemState = true;
   } else if (cmd == 'm' && isSystemState(systemState, IDLE)) {
-    //TODO(radek): Implement changing running mode
+    sendCommand("Starting running mode calibration...");
+    setSystemState(new RunningModeCalibrationState(runningMode));
+    updatedSystemState = true;
+  } else if (cmd == 'w' && isSystemState(systemState, IDLE)) {
+    sendCommand("Starting wheel size calibration...");
+    setSystemState(new WheelSizeCalibrationState(wheelSize));
+    updatedSystemState = true;
   } else if (cmd == 'r' && isSystemState(systemState, IDLE)) {
     resetESP();
   } else if (cmd == 'c' && isSystemState(systemState, IDLE)) {
@@ -149,15 +155,19 @@ bool handleEvent() {
   } else if (cmd == 't' && isSystemState(systemState, IDLE)) {
     sendCommand("Clearing throttle storage...");
     clearThrottleStorage();
+    updatedSystemState = true;
   } else if (cmd == 'b' && isSystemState(systemState, IDLE)) {
     sendCommand("Clearing bike storage...");
     clearBikeStorage();
+    updatedSystemState = true;
   } else if (cmd == 'a' && isSystemState(systemState, IDLE)) {
     sendCommand("Clearing all storage...");
     clearAllStorage();
+    updatedSystemState = true;
   } else if (cmd == 'x' && isSystemState(systemState, IDLE)) {
     sendCommand("Checking init exception");
     initException();
+    updatedSystemState = true;
   }
   // RUNNING
   else if (cmd == 'e' && isSystemState(systemState, RUNNING)) {
@@ -182,6 +192,31 @@ bool handleEvent() {
     setSystemState(new RunningState());
     updatedSystemState = true;
   }
+  // WHEEL_SIZE_CALIBRATION
+  else if (cmd == 'e' && isSystemState(systemState, WHEEL_SIZE_CALIBRATION)) {
+    sendCommand("Exiting wheel size calibration - without saving.");
+    setSystemState(new IdleState());
+    updatedSystemState = true;
+  } else if (cmd == 's' && isSystemState(systemState, WHEEL_SIZE_CALIBRATION)) {
+    saveWheelSizeCalibration();
+    setSystemState(new IdleState());
+    updatedSystemState = true;
+  } else if (isSystemState(systemState, WHEEL_SIZE_CALIBRATION)) {
+    calibrateWheelSize(cmd);
+  }
+  // RUNNING_MODE_CALIBRATION
+  else if (cmd == 'e' && isSystemState(systemState, RUNNING_MODE_CALIBRATION)) {
+    sendCommand("Exiting running mode calibration - without saving.");
+    setSystemState(new IdleState());
+    updatedSystemState = true;
+  } else if (cmd == 's' && isSystemState(systemState, RUNNING_MODE_CALIBRATION)) {
+    sendCommand("Exiting running mode calibration - saving.");
+    saveRunningModeCalibration();
+    setSystemState(new IdleState());
+    updatedSystemState = true;
+  } else if (isSystemState(systemState, RUNNING_MODE_CALIBRATION)) {
+    calibrateRunningMode(cmd);
+  }
 
   return updatedSystemState;
 }
@@ -203,6 +238,10 @@ void loop() {
     storageError();
   } else if (isSystemState(systemState, IDLE)) {
     idle();
+  } else if (isSystemState(systemState, RUNNING_MODE_CALIBRATION)) {
+    calibrateRunningMode(-1);
+  } else if (isSystemState(systemState, WHEEL_SIZE_CALIBRATION)) {
+    calibrateWheelSize(-1);
   } else {
     // Do nothing
   }
@@ -229,7 +268,31 @@ void idle() {
   }
   if (delayTimer->elapsed1000ms()) {
     int timeLeft = (int)floor((TASK_TIMEOUT - currentState->getTimeElapsed(currentMillis)) / 1000);
-    sendCommand("\n\n\nCommands: \n 'e' - exit idle state\n 'r' - reboot\n 'c' - calibrate\n 'x' - check init exception\n 't' - clear throttle storage\n 'b' - clear bike storage\n 'a' - clear all storages\n\nexit in (" + String(timeLeft) + ")");
+    sendCommand("\n\n\nCommands: \n 'e' - exit idle state\n 'r' - reboot\n 'c' - calibrate throttle\n 'm' - setup running mode\n 'w' - setup wheel size\n 'x' - check init exception\n 't' - clear throttle storage\n 'b' - clear bike storage\n 'a' - clear all storages\n\nexit in (" + String(timeLeft) + ")");
+  }
+}
+
+void calibrateRunningMode(char value) {
+  RunningModeCalibrationState* currentState = static_cast<RunningModeCalibrationState*>(systemState);
+
+  if (value >= 0) {
+    currentState->updateCalibration(value);
+  }
+
+  if (delayTimer->elapsed1000ms()) {
+    sendCommand("Press '0' for Speedometer, '1' for PAS, '2' for Throttle\nCurrent running mode: " + String(currentState->mode) + "\nPress 's' to save the value.\n\n");
+  }
+}
+
+void calibrateWheelSize(char value) {
+  WheelSizeCalibrationState* currentState = static_cast<WheelSizeCalibrationState*>(systemState);
+
+  if (value >= 0) {
+    currentState->updateCalibration(value);
+  }
+
+  if (delayTimer->elapsed1000ms()) {
+    sendCommand("Enter number from 0 to 9 to change wheel size, wheel will be calculated by formula 20\" + (entered_number)\".\nExample for 9 -> 29\" wheel size.\nCurrent wheel size: " + String(currentState->wheelSize) + "\"\nPress 's' to save the value.\n\n");
   }
 }
 
@@ -403,6 +466,57 @@ void saveThrottleCalibration() {
   sendCommand("Calibration complete and saved.");
   sendCommand("New Max: " + String(throttleValueMax));
   sendCommand("New Min: " + String(throttleValueMin));
+  return;
+}
+
+void saveWheelSizeCalibration() {
+  WheelSizeCalibrationState* currentState = static_cast<WheelSizeCalibrationState*>(systemState);
+  if (!currentState->isCalibrationCorrect()) {
+    sendCommand("Calibration failed: Invalid wheel size.");
+    return;
+  }
+
+  EEPROM.writeUShort(EEPROM_ADDR_WHEEL_SIZE, currentState->wheelSize);
+
+  unsigned char bikeStatus = EEPROM.readUChar(EEPROM_ADDR_BIKE_STATUS);
+
+  if (bikeStatus != 'C') {
+    EEPROM.writeUShort(EEPROM_ADDR_RUNNING_MODE_INT, runningModeInt);
+  }
+
+  EEPROM.writeUChar(EEPROM_ADDR_BIKE_STATUS, 'C');
+  EEPROM.commit();
+
+  wheelSize = currentState->wheelSize;
+
+  sendCommand("Calibration complete and saved.");
+  sendCommand("New Wheel Size: " + String(wheelSize) + "\"");
+  return;
+}
+
+void saveRunningModeCalibration() {
+  RunningModeCalibrationState* currentState = static_cast<RunningModeCalibrationState*>(systemState);
+  if (!currentState->isCalibrationCorrect()) {
+    sendCommand("Calibration failed: Invalid running mode.");
+    return;
+  }
+
+  EEPROM.writeUChar(EEPROM_ADDR_RUNNING_MODE_INT, runningModeToInt(currentState->mode));
+
+  unsigned char bikeStatus = EEPROM.readUChar(EEPROM_ADDR_BIKE_STATUS);
+
+  if (bikeStatus != 'C') {
+    EEPROM.writeUShort(EEPROM_ADDR_WHEEL_SIZE, wheelSize);
+  }
+
+  EEPROM.writeUChar(EEPROM_ADDR_BIKE_STATUS, 'C');
+  EEPROM.commit();
+
+  runningModeInt = runningModeToInt(currentState->mode);
+  runningMode = currentState->mode;
+
+  sendCommand("Calibration complete and saved.");
+  sendCommand("New Running Mode: " + String(runningMode));
   return;
 }
 

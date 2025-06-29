@@ -6,6 +6,8 @@
 constexpr const char* IDLE = "IDLE";
 constexpr const char* RUNNING = "RUNNING";
 constexpr const char* THROTTLE_CALIBRATION = "THROTTLE_CALIBRATION";
+constexpr const char* WHEEL_SIZE_CALIBRATION = "WHEEL_SIZE_CALIBRATION";
+constexpr const char* RUNNING_MODE_CALIBRATION = "RUNNING_MODE_CALIBRATION";
 constexpr const char* STORAGE_ERROR = "STORAGE_ERROR";
 
 class SystemState {
@@ -56,9 +58,9 @@ public:
 };
 
 enum RunningMode {
-  THROTTLE,
   SPEEDOMETER,
-  PAS
+  PAS,
+  THROTTLE
 };
 
 class RunningState : public SystemState {
@@ -97,6 +99,87 @@ public:
 
   bool isCalibrationCorrect() {
     return minValue < maxValue;
+  }
+};
+
+class WheelSizeCalibrationState : public SystemState {
+public:
+  uint16_t wheelSize;
+  WheelSizeCalibrationState(uint16_t wheelSizeDefault_val)
+    : wheelSize(wheelSizeDefault_val) {}
+
+  const char* type() const override {
+    return WHEEL_SIZE_CALIBRATION;
+  }
+
+  void updateCalibration(char value) {
+    switch (value) {
+      case '9':
+        wheelSize = 29;
+        break;
+      case '8':
+        wheelSize = 28;
+        break;
+      case '7':
+        wheelSize = 27;
+        break;
+      case '6':
+        wheelSize = 26;
+        break;
+      case '5':
+        wheelSize = 25;
+        break;
+      case '4':
+        wheelSize = 24;
+        break;
+      case '3':
+        wheelSize = 23;
+        break;
+      case '2':
+        wheelSize = 22;
+        break;
+      case '1':
+        wheelSize = 21;
+        break;
+      case '0':
+        wheelSize = 20;
+        break;
+    }
+  }
+
+  bool isCalibrationCorrect() {
+    return wheelSize <= 29 && wheelSize >= 20;
+  }
+};
+
+class RunningModeCalibrationState : public SystemState {
+public:
+  RunningMode mode;
+  RunningMode modeDefault;
+  RunningModeCalibrationState(RunningMode modeDefault_val)
+    : mode(modeDefault_val),
+      modeDefault(modeDefault_val) {}
+
+  const char* type() const override {
+    return RUNNING_MODE_CALIBRATION;
+  }
+
+  void updateCalibration(char value) {
+    switch (value) {
+      case '0':
+        mode = SPEEDOMETER;
+        break;
+      case '1':
+        mode = PAS;
+        break;
+      case '2':
+        mode = THROTTLE;
+        break;
+    }
+  }
+
+  bool isCalibrationCorrect() {
+    return true;
   }
 };
 
