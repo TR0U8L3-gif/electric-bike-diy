@@ -63,10 +63,10 @@ enum RunningMode {
 
 class RunningState : public SystemState {
 public:
-  RunningMode mode;
-
-  RunningState(RunningMode mode_val)
-    : mode(mode_val) {}
+  bool isPowerOff;
+  float minSpeedCutOff;
+  RunningState()
+    : isPowerOff(false), minSpeedCutOff(0.0) {}
 
   const char* type() const override {
     return RUNNING;

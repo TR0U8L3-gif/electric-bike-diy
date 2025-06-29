@@ -121,7 +121,7 @@ void setup() {
     systemErrorState = storageErrorState;
     setSystemState(storageErrorState);
   } else {
-    setSystemState(new RunningState(runningMode));
+    setSystemState(new RunningState());
   }
 
   delayTimer->reset();
@@ -136,12 +136,10 @@ bool handleEvent() {
   // IDLE
   if (cmd == 'e' && isSystemState(systemState, IDLE)) {
     sendCommand("Exiting idle.");
-    setSystemState(new RunningState(runningMode));
+    setSystemState(new RunningState());
     updatedSystemState = true;
-  } else if (cmd == 's' && isSystemState(systemState, IDLE)) {
-    sendCommand("Entering running state.");
-    setSystemState(new RunningState(runningMode));
-    updatedSystemState = true;
+  } else if (cmd == 'm' && isSystemState(systemState, IDLE)) {
+    //TODO(radek): Implement changing running mode
   } else if (cmd == 'r' && isSystemState(systemState, IDLE)) {
     resetESP();
   } else if (cmd == 'c' && isSystemState(systemState, IDLE)) {
@@ -154,8 +152,7 @@ bool handleEvent() {
   } else if (cmd == 'b' && isSystemState(systemState, IDLE)) {
     sendCommand("Clearing bike storage...");
     clearBikeStorage();
-  } 
-  else if (cmd == 'a' && isSystemState(systemState, IDLE)) {
+  } else if (cmd == 'a' && isSystemState(systemState, IDLE)) {
     sendCommand("Clearing all storage...");
     clearAllStorage();
   } else if (cmd == 'x' && isSystemState(systemState, IDLE)) {
@@ -176,13 +173,13 @@ bool handleEvent() {
   } else if (cmd == 's' && isSystemState(systemState, THROTTLE_CALIBRATION)) {
     sendCommand("Exiting throttle calibration - saving.");
     saveThrottleCalibration();
-    setSystemState(new RunningState(runningMode));
+    setSystemState(new RunningState());
     updatedSystemState = true;
   }
   // STORAGE_ERROR
   else if (cmd == 'e' && isSystemState(systemState, STORAGE_ERROR)) {
     sendCommand("Exiting storage error.");
-    setSystemState(new RunningState(runningMode));
+    setSystemState(new RunningState());
     updatedSystemState = true;
   }
 
@@ -303,6 +300,8 @@ void runSystemThrottle() {
 }
 
 void runSystemSpeedometer() {
+  RunningState* currentState = static_cast<RunningState*>(systemState);
+
   throttleValue = analogRead(THROTTLE_PIN);
   bool speedometerClick = digitalRead(SPEEDOMETER_PIN);
 
@@ -339,11 +338,24 @@ void runSystemSpeedometer() {
     { 3.0 * KMH_TO_MS, 15.0 * KMH_TO_MS }
   };
 
-  // TODO(radek): cut power off until power will increase to +1m/s from the lowest speed point
   unsigned int throttlePower = throttleToPower(throttleValue, throttleValueMin, throttleValueMax);
   unsigned int assistPower = assistToPower(speedometerSpeed, assistCurveLow);
 
   if (throttlePower > 30) {
+    currentState->isPowerOff = true;
+    currentState->minSpeedCutOff = speedometerSpeed;
+  } else {
+    if (currentState->isPowerOff) {
+      if (speedometerSpeed < currentState->minSpeedCutOff) {
+        currentState->minSpeedCutOff = speedometerSpeed;
+      }
+      if (speedometerSpeed >= currentState->minSpeedCutOff + 1.0) {
+        currentState->isPowerOff = false;
+      }
+    }
+  }
+
+  if (currentState->isPowerOff) {
     powerValue = 0;
   } else {
     powerValue = assistPower;
@@ -352,7 +364,7 @@ void runSystemSpeedometer() {
   analogWrite(THROTTLE_OUT_PIN, map(powerValue, 0, 100, 0, 255));  // scale 0–100% to 0–255
 
   if (delayTimer->elapsed100ms() || speedometerClick) {
-    sendCommand("Power: " + String(powerValue) + " Speed: " + String(speedometerSpeed * MS_TO_KMS) + "km\\h Throttle: " + String(throttleValue) + " Click: " + String(speedometerClick ? 1 : 0) + "/" + String(speedometerValue ? 1 : 0) + "=" + String(speedometerClickVerified ? 1 : 0) + " SpeedometerTimeDelta: " + String(speedometerTimeDelta));
+    sendCommand("Power: " + String(powerValue) + "[" + String(currentState->isPowerOff ? ("Off - " + String(currentState->minSpeedCutOff * MS_TO_KMS) + "km\\h") : "On") + "] Speed: " + String(speedometerSpeed * MS_TO_KMS) + "km\\h Throttle: " + String(throttleValue) + " Click: " + String(speedometerClick ? 1 : 0) + "/" + String(speedometerValue ? 1 : 0) + "=" + String(speedometerClickVerified ? 1 : 0) + " SpeedometerTimeDelta: " + String(speedometerTimeDelta));
   }
 }
 
