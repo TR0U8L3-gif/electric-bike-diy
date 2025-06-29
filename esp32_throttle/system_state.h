@@ -35,7 +35,7 @@ public:
   }
 
   unsigned long getTimeElapsed(unsigned long time) {
-    return time - timer; 
+    return time - timer;
   }
 
   bool isTimeElapsed(unsigned long time, unsigned long delay) {
@@ -46,7 +46,6 @@ public:
       return time - timer >= delay;
     }
   }
-
 };
 
 class IdleState : public SystemState {
@@ -56,8 +55,19 @@ public:
   }
 };
 
+enum RunningMode {
+  THROTTLE,
+  SPEEDOMETER,
+  PAS
+};
+
 class RunningState : public SystemState {
 public:
+  bool isPowerOff;
+  float minSpeedCutOff;
+  RunningState()
+    : isPowerOff(false), minSpeedCutOff(0.0) {}
+
   const char* type() const override {
     return RUNNING;
   }
@@ -93,9 +103,11 @@ public:
 class StorageErrorState : public SystemState {
 public:
   bool throttleCalibrationError;
+  bool bikeCalibrationError;
   bool ledStatus;
-  StorageErrorState(bool throttleCalibrationError_val = false)
+  StorageErrorState(bool throttleCalibrationError_val = false, bool bikeCalibrationError_val = false)
     : throttleCalibrationError(throttleCalibrationError_val),
+      bikeCalibrationError(bikeCalibrationError_val),
       ledStatus(true) {}
 
   const char* type() const override {
@@ -117,5 +129,9 @@ public:
 };
 
 bool isSystemState(SystemState* state, const char* type);
+
+uint8_t runningModeToInt(RunningMode value);
+
+RunningMode runningModeFromInt(uint8_t value);
 
 #endif
