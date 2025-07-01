@@ -67,8 +67,11 @@ class RunningState : public SystemState {
 public:
   bool isPowerOff;
   float minSpeedCutOff;
+  bool isThrottleClicked;
+  unsigned int clickCount;
+  unsigned long lastClickTime;
   RunningState()
-    : isPowerOff(false), minSpeedCutOff(0.0) {}
+    : isPowerOff(false), minSpeedCutOff(0.0), isThrottleClicked(false), clickCount(0), lastClickTime(0) {}
 
   const char* type() const override {
     return RUNNING;

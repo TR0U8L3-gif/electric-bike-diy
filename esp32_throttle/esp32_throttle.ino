@@ -6,6 +6,10 @@
 #include "system_functions.h"
 
 // Constants
+#define MAX_CLICK_INTERVAL 1000  // Max time between clicks (in ms)
+#define MAX_CLICK_COUNT 5        // Max time between clicks (in ms)
+#define POWER_THRESHOLD 20       // Minimum power value to consider throttle clicked
+#define POWER_OFFSET 5           // Offset power value to consider throttle clicked
 
 #define THROTTLE_VALUE_MAX_DEFAULT 3500  // default max throttle value
 #define THROTTLE_VALUE_MIN_DEFAULT 1500  // default min throttle value
@@ -61,6 +65,7 @@ void setup() {
   digitalWrite(LED_PIN, HIGH);
 
   // TODO(radek): Implement reading Assist -> Levels Points and AssistCurve
+
   InitializeBikeStorageParameters initBikeParams = InitializeBikeStorageParameters(
     EEPROM_ADDR_BIKE_STATUS,
     EEPROM_ADDR_WHEEL_SIZE,
@@ -353,12 +358,49 @@ void runSystem() {
 }
 
 void runSystemThrottle() {
+  RunningState* currentState = static_cast<RunningState*>(systemState);
+
+  if (currentState->clickCount >= MAX_CLICK_COUNT) {
+    sendCommand(String(MAX_CLICK_COUNT) + " throttle clicks detected!");
+    runningMode = SPEEDOMETER;
+    powerValue = 0;
+    analogWrite(THROTTLE_OUT_PIN, 0);
+    return;
+  }
+
   throttleValue = analogRead(THROTTLE_PIN);
   powerValue = throttleToPower(throttleValue, throttleValueMin, throttleValueMax);
   analogWrite(THROTTLE_OUT_PIN, map(powerValue, 0, 100, 0, 255));  // scale 0–100% to 0–255
 
+  bool isThrottleHigh = powerValue >= (POWER_THRESHOLD + POWER_OFFSET);
+  bool isThrottleLow = powerValue <= (POWER_THRESHOLD - POWER_OFFSET);
+
+  if (isThrottleHigh) {
+    if (!currentState->isThrottleClicked) {
+      unsigned long currentTime = millis();
+      if (currentState->clickCount >= MAX_CLICK_COUNT) {
+        currentState->lastClickTime = currentTime;
+      } else if (currentState->clickCount == 0 || (currentTime - currentState->lastClickTime <= MAX_CLICK_INTERVAL)) {
+        currentState->clickCount++;
+        currentState->lastClickTime = currentTime;
+      } else {
+        currentState->clickCount = 0;
+        currentState->lastClickTime = currentTime;
+      }
+    }
+    currentState->isThrottleClicked = true;
+  }
+  if (isThrottleLow) {
+    currentState->isThrottleClicked = false;
+  }
+
+  if (currentState->clickCount > 0 && (millis() - currentState->lastClickTime > MAX_CLICK_INTERVAL)) {
+    currentState->clickCount = 0;
+  }
+
+
   if (delayTimer->elapsed100ms()) {
-    sendCommand("Power: " + String(powerValue) + " Throttle: " + String(throttleValue));
+    sendCommand("Power: " + String(powerValue) + " Throttle: " + String(throttleValue) + "[" + String(currentState->clickCount) + "/" + String(MAX_CLICK_COUNT) + "] " + String(currentState->isThrottleClicked ? "clicked" : ""));
   }
 }
 
@@ -404,7 +446,7 @@ void runSystemSpeedometer() {
   unsigned int throttlePower = throttleToPower(throttleValue, throttleValueMin, throttleValueMax);
   unsigned int assistPower = assistToPower(speedometerSpeed, assistCurveLow);
 
-  if (throttlePower > 30) {
+  if (throttlePower > POWER_THRESHOLD) {
     currentState->isPowerOff = true;
     currentState->minSpeedCutOff = speedometerSpeed;
   } else {
@@ -544,8 +586,6 @@ void clearAllStorage() {
   }
   EEPROM.commit();
 }
-// TODO(radek): configure wheelSize char to int
-// TODO(radek): configure running mode provide number
 
 // == Other functions ==
 
