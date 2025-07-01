@@ -6,8 +6,10 @@
 #include "system_functions.h"
 
 // Constants
-#define MAX_CLICK_INTERVAL 1000  // Max time between clicks (in ms)
-#define MAX_CLICK_COUNT 5        // Max time between clicks (in ms)
+#define MIN_CLICK_INTERVAL 1000  // Min time between clicks (in ms)
+#define MAX_CLICK_INTERVAL 300   // Max time between clicks (in ms)
+#define MIN_CLICK_COUNT 3        // Min time between clicks (in ms)
+#define MAX_CLICK_COUNT 4        // Max time between clicks (in ms)
 #define POWER_THRESHOLD 20       // Minimum power value to consider throttle clicked
 #define POWER_OFFSET 5           // Offset power value to consider throttle clicked
 
@@ -345,6 +347,50 @@ void storageError() {
 }
 
 void runSystem() {
+  RunningState* currentState = static_cast<RunningState*>(systemState);
+
+  uint8_t power = throttleToPower(throttleValue, throttleValueMin, throttleValueMax);
+  bool isThrottleHigh = power >= (POWER_THRESHOLD + POWER_OFFSET);
+  bool isThrottleLow = power <= (POWER_THRESHOLD - POWER_OFFSET);
+
+  if (isThrottleHigh) {
+    if (!currentState->isThrottleClicked) {
+      unsigned long currentTime = millis();
+      if (currentState->clickCount > clickCount()) {
+        currentState->lastClickTime = currentTime;
+      } else if (currentState->clickCount == 0 || (currentTime - currentState->lastClickTime <= clickInterval())) {
+        currentState->clickCount++;
+        currentState->lastClickTime = currentTime;
+      } else {
+        currentState->clickCount = 0;
+        currentState->lastClickTime = currentTime;
+      }
+    }
+    currentState->isThrottleClicked = true;
+  }
+  if (isThrottleLow) {
+    currentState->isThrottleClicked = false;
+  }
+
+  if (millis() - currentState->lastClickTime > clickInterval()) {
+    if (currentState->clickCount == clickCount() && runningMode == SPEEDOMETER) {
+      sendCommand(String(clickCount()) + " throttle clicks detected!");
+      currentState->clickCount = 0;
+      changeModeClick();
+      return;
+    }
+    if (currentState->clickCount > 0) {
+      currentState->clickCount = 0;
+    }
+  }
+
+  if (currentState->clickCount >= clickCount() && runningMode != SPEEDOMETER) {
+    sendCommand(String(clickCount()) + " throttle clicks detected!");
+    currentState->clickCount = 0;
+    changeModeClick();
+    return;
+  }
+
   switch (runningMode) {
     case THROTTLE:
       return runSystemThrottle();
@@ -360,47 +406,12 @@ void runSystem() {
 void runSystemThrottle() {
   RunningState* currentState = static_cast<RunningState*>(systemState);
 
-  if (currentState->clickCount >= MAX_CLICK_COUNT) {
-    sendCommand(String(MAX_CLICK_COUNT) + " throttle clicks detected!");
-    runningMode = SPEEDOMETER;
-    powerValue = 0;
-    analogWrite(THROTTLE_OUT_PIN, 0);
-    return;
-  }
-
   throttleValue = analogRead(THROTTLE_PIN);
   powerValue = throttleToPower(throttleValue, throttleValueMin, throttleValueMax);
   analogWrite(THROTTLE_OUT_PIN, map(powerValue, 0, 100, 0, 255));  // scale 0–100% to 0–255
 
-  bool isThrottleHigh = powerValue >= (POWER_THRESHOLD + POWER_OFFSET);
-  bool isThrottleLow = powerValue <= (POWER_THRESHOLD - POWER_OFFSET);
-
-  if (isThrottleHigh) {
-    if (!currentState->isThrottleClicked) {
-      unsigned long currentTime = millis();
-      if (currentState->clickCount >= MAX_CLICK_COUNT) {
-        currentState->lastClickTime = currentTime;
-      } else if (currentState->clickCount == 0 || (currentTime - currentState->lastClickTime <= MAX_CLICK_INTERVAL)) {
-        currentState->clickCount++;
-        currentState->lastClickTime = currentTime;
-      } else {
-        currentState->clickCount = 0;
-        currentState->lastClickTime = currentTime;
-      }
-    }
-    currentState->isThrottleClicked = true;
-  }
-  if (isThrottleLow) {
-    currentState->isThrottleClicked = false;
-  }
-
-  if (currentState->clickCount > 0 && (millis() - currentState->lastClickTime > MAX_CLICK_INTERVAL)) {
-    currentState->clickCount = 0;
-  }
-
-
   if (delayTimer->elapsed100ms()) {
-    sendCommand("Power: " + String(powerValue) + " Throttle: " + String(throttleValue) + "[" + String(currentState->clickCount) + "/" + String(MAX_CLICK_COUNT) + "] " + String(currentState->isThrottleClicked ? "clicked" : ""));
+    sendCommand("Power: " + String(powerValue) + " Throttle: " + String(throttleValue) + " [" + String(currentState->clickCount) + "/" + String(clickCount()) + "] " + String(currentState->isThrottleClicked ? "clicked" : ""));
   }
 }
 
@@ -469,7 +480,7 @@ void runSystemSpeedometer() {
   analogWrite(THROTTLE_OUT_PIN, map(powerValue, 0, 100, 0, 255));  // scale 0–100% to 0–255
 
   if (delayTimer->elapsed100ms() || speedometerClick) {
-    sendCommand("Power: " + String(powerValue) + "[" + String(currentState->isPowerOff ? ("Off - " + String(currentState->minSpeedCutOff * MS_TO_KMS) + "km\\h") : "On") + "] Speed: " + String(speedometerSpeed * MS_TO_KMS) + "km\\h Throttle: " + String(throttleValue) + " Click: " + String(speedometerClick ? 1 : 0) + "/" + String(speedometerValue ? 1 : 0) + "=" + String(speedometerClickVerified ? 1 : 0) + " SpeedometerTimeDelta: " + String(speedometerTimeDelta));
+    sendCommand("Power: " + String(powerValue) + "[" + String(currentState->isPowerOff ? ("Off - " + String(currentState->minSpeedCutOff * MS_TO_KMS) + "km\\h") : "On") + "] Speed: " + String(speedometerSpeed * MS_TO_KMS) + "km\\h Throttle: " + String(throttleValue) + " Click: " + String(speedometerClick ? 1 : 0) + "/" + String(speedometerValue ? 1 : 0) + "=" + String(speedometerClickVerified ? 1 : 0) + " [" + String(currentState->clickCount) + "/" + String(clickCount()) + "] " + String(currentState->isThrottleClicked ? "clicked" : ""));
   }
 }
 
@@ -597,7 +608,50 @@ void setSystemState(SystemState* newState) {
   systemState = newState;
 }
 
-// TODO(radek): Implement Bluetooth communication
+// TODO(radek): Implement BLE communication
 void sendCommand(String message) {
   Serial.println(message);
+}
+
+unsigned int clickCount() {
+  switch (runningMode) {
+    case THROTTLE:
+      return MIN_CLICK_COUNT;
+    case SPEEDOMETER:
+      return MAX_CLICK_COUNT;
+    case PAS:
+      return MIN_CLICK_COUNT;
+    default:
+      return MIN_CLICK_COUNT;
+  }
+}
+
+unsigned int clickInterval() {
+  switch (runningMode) {
+    case THROTTLE:
+      return MIN_CLICK_INTERVAL;
+    case SPEEDOMETER:
+      return MAX_CLICK_INTERVAL;
+    case PAS:
+      return MIN_CLICK_INTERVAL;
+    default:
+      return MIN_CLICK_INTERVAL;
+  }
+}
+
+void changeModeClick() {
+  switch (runningMode) {
+    case THROTTLE:
+      runningMode = SPEEDOMETER;
+      break;
+    case SPEEDOMETER:
+      runningMode = THROTTLE;
+      break;
+    case PAS:
+      runningMode = SPEEDOMETER;
+      break;
+    default:
+      runningMode = SPEEDOMETER;
+      break;
+  }
 }
