@@ -44,6 +44,12 @@ public:
     return 0;
   }
 
+  void readBluetoothData(char c) {
+    if (bluetoothCommand == 0) {
+      bluetoothCommand = c;
+    }
+  }
+
   char getCommand() {
     char result = 0;
     if (command != 0) {

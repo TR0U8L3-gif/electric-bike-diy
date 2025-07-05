@@ -206,10 +206,22 @@ public:
   }
 
   char* getErrorMessage() {
-    if (throttleCalibrationError) {
+    if(bikeCalibrationError)
+      return "error: Bike calibration error. Please calibrate wheelsize and running mode.";
+    else if (throttleCalibrationError) {
       return "error: Throttle calibration error. Please calibrate the throttle.";
     } else {
       return "error: Storage error. Please reset the storage.";
+    }
+  }
+
+  char* getErrorMessageShort() {
+    if (bikeCalibrationError) {
+      return "error,c-bk";
+    } else if (throttleCalibrationError) {
+      return "error,c-th";
+    } else {
+      return "error,c-st";
     }
   }
 };
