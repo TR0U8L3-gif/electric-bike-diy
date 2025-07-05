@@ -6,12 +6,13 @@
 #include "system_functions.h"
 
 // Constants
-#define MIN_CLICK_INTERVAL 1000  // Min time between clicks (in ms)
-#define MAX_CLICK_INTERVAL 300   // Max time between clicks (in ms)
-#define MIN_CLICK_COUNT 3        // Min time between clicks (in ms)
-#define MAX_CLICK_COUNT 4        // Max time between clicks (in ms)
-#define POWER_THRESHOLD 20       // Minimum power value to consider throttle clicked
-#define POWER_OFFSET 5           // Offset power value to consider throttle clicked
+#define MIN_CLICK_INTERVAL 500  // Min time between clicks (in ms)
+#define MAX_CLICK_INTERVAL 300  // Max time between clicks (in ms)
+#define MIN_CLICK_COUNT 3       // Min time between clicks (in ms)
+#define MAX_CLICK_COUNT 6       // Max time between clicks (in ms)
+#define POWER_THRESHOLD_MAX 40  // Maximum power value to consider throttle clicked
+#define POWER_THRESHOLD_MIN 20  // Minimum power value to consider throttle clicked
+#define POWER_OFFSET 15         // Offset power value to consider throttle clicked
 
 #define THROTTLE_VALUE_MAX_DEFAULT 3500  // default max throttle value
 #define THROTTLE_VALUE_MIN_DEFAULT 1500  // default min throttle value
@@ -350,25 +351,23 @@ void runSystem() {
   RunningState* currentState = static_cast<RunningState*>(systemState);
 
   uint8_t power = throttleToPower(throttleValue, throttleValueMin, throttleValueMax);
-  bool isThrottleHigh = power >= (POWER_THRESHOLD + POWER_OFFSET);
-  bool isThrottleLow = power <= (POWER_THRESHOLD - POWER_OFFSET);
+  bool isThrottleHigh = power >= (POWER_THRESHOLD_MAX + POWER_OFFSET);
+  bool isThrottleLow = power <= (POWER_THRESHOLD_MAX - POWER_OFFSET);
 
-  if (isThrottleHigh) {
-    if (!currentState->isThrottleClicked) {
-      unsigned long currentTime = millis();
-      if (currentState->clickCount > clickCount()) {
-        currentState->lastClickTime = currentTime;
-      } else if (currentState->clickCount == 0 || (currentTime - currentState->lastClickTime <= clickInterval())) {
-        currentState->clickCount++;
-        currentState->lastClickTime = currentTime;
-      } else {
-        currentState->clickCount = 0;
-        currentState->lastClickTime = currentTime;
-      }
+  if (isThrottleHigh && !currentState->isThrottleClicked) {
+    unsigned long currentTime = millis();
+    if (currentState->clickCount > clickCount()) {
+      currentState->lastClickTime = currentTime;
+    } else if (currentState->clickCount == 0 || (currentTime - currentState->lastClickTime <= clickInterval())) {
+      currentState->clickCount++;
+      currentState->lastClickTime = currentTime;
+    } else {
+      currentState->clickCount = 0;
+      currentState->lastClickTime = currentTime;
     }
     currentState->isThrottleClicked = true;
   }
-  if (isThrottleLow) {
+  if (isThrottleLow && currentState->isThrottleClicked) {
     currentState->isThrottleClicked = false;
   }
 
@@ -445,19 +444,19 @@ void runSystemSpeedometer() {
 
   AssistCurve assistCurveLow = {
     // AssistPoint (curve points)
-    { 0.0 * KMH_TO_MS, 30 },
+    { 0.0 * KMH_TO_MS, 70 },
     { 6.0 * KMH_TO_MS, 80 },
-    { 12.0 * KMH_TO_MS, 90 },
-    { 15.0 * KMH_TO_MS, 0 },
+    { 15.0 * KMH_TO_MS, 90 },
+    { 20.0 * KMH_TO_MS, 0 },
 
     // AssistLevel (active range)
-    { 3.0 * KMH_TO_MS, 15.0 * KMH_TO_MS }
+    { 3.0 * KMH_TO_MS, 20.0 * KMH_TO_MS }
   };
 
   unsigned int throttlePower = throttleToPower(throttleValue, throttleValueMin, throttleValueMax);
   unsigned int assistPower = assistToPower(speedometerSpeed, assistCurveLow);
 
-  if (throttlePower > POWER_THRESHOLD) {
+  if (throttlePower > POWER_THRESHOLD_MIN) {
     currentState->isPowerOff = true;
     currentState->minSpeedCutOff = speedometerSpeed;
   } else {

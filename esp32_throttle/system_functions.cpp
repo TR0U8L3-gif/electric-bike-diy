@@ -12,7 +12,7 @@ uint16_t map_uint16_t(uint16_t x, uint16_t in_min, uint16_t in_max, uint16_t out
 }
 
 unsigned long timeFor1Kmh(uint8_t wheel_size) {
-  float wheel_circumference_m = wheel_size * CAL_TO_METER;
+  float wheel_circumference_m = wheel_size * CAL_TO_METER * PI;
   float time_sec = wheel_circumference_m / KMH_TO_MS;
   return static_cast<unsigned long>(time_sec * 1000);
 }
@@ -56,7 +56,7 @@ float computeSpeed(uint8_t wheelSizeInInches, unsigned long timeDeltaMs) {
 
 unsigned long computeDeltaTime(uint8_t wheel_size, float speed_ms) {
   if (speed_ms <= 0.0f) return 0.0f;
-  float wheel_circumference_m = PI * wheel_size * CAL_TO_METER;
+  float wheel_circumference_m = wheel_size * CAL_TO_METER * PI;
   return static_cast<unsigned long>((wheel_circumference_m / speed_ms) * 1000);
 }
 
