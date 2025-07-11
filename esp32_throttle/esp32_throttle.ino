@@ -13,10 +13,10 @@
 // Constants
 #define MIN_CLICK_INTERVAL 300  // Min time between clicks (in ms)
 #define MAX_CLICK_INTERVAL 350  // Max time between clicks (in ms)
-#define MIN_CLICK_COUNT 4       // Min time between clicks (in ms)
+#define MIN_CLICK_COUNT 3       // Min time between clicks (in ms)
 #define MAX_CLICK_COUNT 6       // Max time between clicks (in ms)
-#define POWER_THRESHOLD_MAX 40  // Maximum power value to consider throttle clicked
-#define POWER_THRESHOLD_MIN 20  // Minimum power value to consider throttle clicked
+#define POWER_THRESHOLD_MAX 50  // Maximum power value to consider throttle clicked
+#define POWER_THRESHOLD_MIN 40  // Minimum power value to consider throttle clicked
 #define POWER_OFFSET 15         // Offset power value to consider throttle clicked
 
 #define THROTTLE_VALUE_MAX_DEFAULT 3500  // default max throttle value
@@ -377,6 +377,9 @@ void calibrateThrottle() {
     uint16_t val = analogRead(THROTTLE_PIN);
     currentState->updateCalibrationValues(val);
     sendCommand("Reading: " + String(val) + " | MAX: " + String(currentState->maxValue) + " | MIN: " + String(currentState->minValue));
+  }
+
+  if (delayTimer->elapsed1000ms()) {
     sendCommandBLE("c-th," + String(currentState->maxValue) + "," + String(currentState->minValue));
   }
 }
@@ -409,6 +412,8 @@ void storageError() {
   }
   if (delayTimer->elapsed800ms()) {
     sendCommand(currentState->getErrorMessage());
+  }
+  if (delayTimer->elapsed1000ms()) {
     sendCommandBLE(currentState->getErrorMessageShort());
   }
 }
@@ -473,11 +478,19 @@ void runSystemThrottle() {
 
   throttleValue = analogRead(THROTTLE_PIN);
   powerValue = throttleToPower(throttleValue, throttleValueMin, throttleValueMax);
+
+  // Limit power value to 0-90%
+  if(powerValue > 90){
+    powerValue = 90;  
+  }
+
   analogWrite(THROTTLE_OUT_PIN, map(powerValue, 0, 100, 0, 255));  // scale 0–100% to 0–255
 
   if (delayTimer->elapsed100ms()) {
     sendCommand("Power: " + String(powerValue) + " Throttle: " + String(throttleValue) + " [" + String(currentState->clickCount) + "/" + String(clickCount()) + "] " + String(currentState->isThrottleClicked ? "clicked" : ""));
-    sendCommandBLE("th," + String(powerValue) + "," + String(throttleValue));
+  }
+  if (delayTimer->elapsed1000ms()) {
+    sendCommandBLE("th," + String(powerValue) + "," + String(throttleValue)+ "," + String(currentState->clickCount));
   }
 }
 
@@ -511,33 +524,38 @@ void runSystemSpeedometer() {
 
   AssistCurve assistCurveLow = {
     // AssistPoint (curve points)
-    { 0.0 * KMH_TO_MS, 70 },
-    { 6.0 * KMH_TO_MS, 90 },
-    { 15.0 * KMH_TO_MS, 70 },
-    { 20.0 * KMH_TO_MS, 0 },
+    { 0.0 * KMH_TO_MS, 60 },
+    { 6.0 * KMH_TO_MS, 70 },
+    { 15.0 * KMH_TO_MS, 90 },
+    { 20.0 * KMH_TO_MS, 70 },
 
     // AssistLevel (active range)
-    { 3.0 * KMH_TO_MS, 20.0 * KMH_TO_MS }
+    { 6.0 * KMH_TO_MS, 20.0 * KMH_TO_MS }
   };
 
   unsigned int throttlePower = throttleToPower(throttleValue, throttleValueMin, throttleValueMax);
   unsigned int assistPower = assistToPower(speedometerSpeed, assistCurveLow);
 
-  if (throttlePower > POWER_THRESHOLD_MIN) {
+  if (currentState->clickCount >= 3) {
+    currentState->isPowerOff = false;
+  } else if (currentState->clickCount >= 2) {
     currentState->isPowerOff = true;
-    currentState->minSpeedCutOff = speedometerSpeed;
-  } else {
-    if (currentState->isPowerOff) {
-      if (speedometerSpeed < currentState->minSpeedCutOff) {
-        currentState->minSpeedCutOff = speedometerSpeed;
-      }
-      if (speedometerSpeed >= currentState->minSpeedCutOff + 1.0) {
-        currentState->isPowerOff = false;
-      }
-    }
   }
 
-  if (currentState->isPowerOff) {
+  // power mode will not activate automatically, pressing throttle 2 times will activate it  
+
+  // if (currentState->isPowerOff) {
+  //   if (speedometerSpeed < currentState->minSpeedCutOff) {
+  //     currentState->minSpeedCutOff = speedometerSpeed;
+  //   }
+  //   if (speedometerSpeed >= currentState->minSpeedCutOff + 1.0) {
+  //     currentState->isPowerOff = false;
+  //   }
+  // }
+
+  if (throttlePower > POWER_THRESHOLD_MIN) {
+    powerValue = 0;
+  } else if (currentState->isPowerOff) {
     powerValue = 0;
   } else {
     powerValue = assistPower;
@@ -546,14 +564,18 @@ void runSystemSpeedometer() {
   analogWrite(THROTTLE_OUT_PIN, map(powerValue, 0, 100, 0, 255));  // scale 0–100% to 0–255
 
   if (delayTimer->elapsed100ms() || speedometerClick) {
-    sendCommand("Power: " + String(powerValue) + "[" + String(currentState->isPowerOff ? ("Off - " + String(currentState->minSpeedCutOff * MS_TO_KMS) + "km\\h") : "On") + "] Speed: " + String(speedometerSpeed * MS_TO_KMS) + "km\\h Throttle: " + String(throttleValue) + " Click: " + String(speedometerClick ? 1 : 0) + "/" + String(speedometerValue ? 1 : 0) + "=" + String(speedometerClickVerified ? 1 : 0) + " [" + String(currentState->clickCount) + "/" + String(clickCount()) + "] " + String(currentState->isThrottleClicked ? "clicked" : ""));
-    sendCommandBLE("sp," + String(powerValue) + "," + String(speedometerSpeed * MS_TO_KMS) + "," + String(currentState->isPowerOff ? "0" : "1") + "," + String(speedometerClick ? "1" : "0"));
+    sendCommand("Power: " + String(powerValue) + "[" + String(currentState->isPowerOff ? ("Off - " + String(currentState->minSpeedCutOff * MS_TO_KMS) + "km\\h") : "On") + "] Speed: " + String(speedometerSpeed * MS_TO_KMS) + "km\\h Throttle: " + String(throttleValue) + " Click: " + String(speedometerClick ? 1 : 0) + "/" + String(speedometerValue ? 1 : 0) + "=" + String(speedometerClickVerified ? 1 : 0));
+  }
+  if (delayTimer->elapsed1000ms() || speedometerClick) {
+    sendCommandBLE("sp," + String(powerValue) + "," + String(speedometerSpeed * MS_TO_KMS) + "," + String(currentState->isPowerOff ? "1" : "0") + "," + String(speedometerClick ? "1" : "0") + "," + String(currentState->clickCount));
   }
 }
 
 void runSystemPas() {
   if (delayTimer->elapsed100ms()) {
     sendCommand("Power: 0 (placeholder for PAS mode)");
+  }
+  if (delayTimer->elapsed1000ms()) {
     sendCommandBLE("pas");
   }
 }
